@@ -2,7 +2,7 @@ import os
 import wandb
 
 from datasets import load_dataset
-from transformers import AutoTokenizer, GenerationConfig
+from transformers import AutoProcessor, AutoTokenizer, GenerationConfig
 
 from trl import (
     LogCompletionsCallback,
@@ -92,6 +92,132 @@ class CustomScriptArguments(ScriptArguments):
             "Typical range: 0.99–0.9999. Only used when use_ema_teacher=True."
         },
     )
+    use_vcd_opsd: bool = field(
+        default=False,
+        metadata={
+            "help": "Enable visual OPSD training branch. This follows OPSD on-policy training: trajectory is sampled from student condition, teacher provides privileged/stronger visual supervision."
+        },
+    )
+    vcd_alpha: float = field(
+        default=1.0,
+        metadata={
+            "help": "Contrastive strength alpha for teacher logits mixing: z_vcd = (1+alpha)*z_good - alpha*z_bad."
+        },
+    )
+    good_view_field: str = field(
+        default="problem_good_view",
+        metadata={
+            "help": "Legacy dataset field for teacher/factual view. Used as a fallback when pair-based view fields are missing."
+        },
+    )
+    bad_view_field: str = field(
+        default="problem_bad_view",
+        metadata={
+            "help": "Legacy dataset field for student/perturbed view. Used as a fallback when pair-based view fields are missing."
+        },
+    )
+    view_pairs: str = field(
+        default="clean-noise,mask-clean",
+        metadata={
+            "help": "Teacher-student view pairs for VLM distillation, e.g. 'clean-noise,mask-clean'. Format: teacher-student."
+        },
+    )
+    view_field_prefix: str = field(
+        default="problem_",
+        metadata={
+            "help": "Prefix used to resolve pair tags to dataset fields. Example: prefix='problem_' and pair clean-noise map to problem_clean/problem_noise."
+        },
+    )
+    pair_sampling_strategy: str = field(
+        default="random",
+        metadata={
+            "help": "How to choose a pair when multiple teacher-student pairs are configured and available. Options: random, first, round_robin."
+        },
+    )
+    dataset_name: str = field(
+        default="siyanzhao/Openthoughts_math_30k_opsd",
+        metadata={
+            "help": "Dataset name or local path to training data. Replace this with your VLM view-pair dataset."
+        },
+    )
+    dataset_config_name: str = field(
+        default=None,
+        metadata={
+            "help": "Optional dataset config name passed to load_dataset."
+        },
+    )
+    train_split: str = field(
+        default="train",
+        metadata={
+            "help": "Dataset split used for training."
+        },
+    )
+    problem_field: str = field(
+        default="problem",
+        metadata={
+            "help": "Field name used as the base prompt/question."
+        },
+    )
+    solution_field: str = field(
+        default="solution",
+        metadata={
+            "help": "Field name used as reference rationale/answer for teacher prompting."
+        },
+    )
+    use_image_perturbation_pairs: bool = field(
+        default=False,
+        metadata={
+            "help": "Build teacher-student view pairs from online image perturbations in the collator. Requires a multimodal processor/model."
+        },
+    )
+    image_field: str = field(
+        default="image",
+        metadata={
+            "help": "Image column name used to build perturbation-based view pairs."
+        },
+    )
+    image_token: str = field(
+        default="<image>",
+        metadata={
+            "help": "Image placeholder token inserted into textual prompts for multimodal chat templates."
+        },
+    )
+    noise_std: float = field(
+        default=25.0,
+        metadata={
+            "help": "Gaussian noise std for the noise view transform."
+        },
+    )
+    mask_ratio: float = field(
+        default=0.25,
+        metadata={
+            "help": "Rectangle area ratio for the mask view transform."
+        },
+    )
+    blur_radius: float = field(
+        default=2.0,
+        metadata={
+            "help": "Gaussian blur radius for the blur view transform."
+        },
+    )
+    use_multimodal_processor: bool = field(
+        default=False,
+        metadata={
+            "help": "Load AutoProcessor instead of AutoTokenizer. Required for image perturbation pair training."
+        },
+    )
+    use_privileged_visual_teacher: bool = field(
+        default=False,
+        metadata={
+            "help": "Enable privileged visual teacher p_T(.|x,v,z*): teacher prompt includes privileged visual evidence field."
+        },
+    )
+    privileged_visual_field: str = field(
+        default="privileged_visual_evidence",
+        metadata={
+            "help": "Dataset field name for privileged visual evidence z* used only by teacher."
+        },
+    )
 
 
 if __name__ == "__main__":
@@ -153,6 +279,14 @@ if __name__ == "__main__":
             "fixed_teacher=True requires use_peft=True. As the fixed teacher is implemented by disabling LoRA adapters."
         )
 
+    if script_args.use_vcd_opsd and script_args.reason_first:
+        raise ValueError("use_vcd_opsd=True and reason_first=True are mutually exclusive in this visual OPSD setup.")
+
+    if script_args.use_image_perturbation_pairs and not script_args.use_multimodal_processor:
+        raise ValueError(
+            "use_image_perturbation_pairs=True requires use_multimodal_processor=True."
+        )
+
     # Only initialize wandb on main process (LOCAL_RANK 0 or not set)
     if os.environ.get("LOCAL_RANK", "0") == "0":
         wandb.init(
@@ -181,6 +315,27 @@ if __name__ == "__main__":
                 "top_k_loss": script_args.top_k_loss if script_args.top_k_loss > 0 else None,
                 "use_ema_teacher": script_args.use_ema_teacher,
                 "ema_decay": script_args.ema_decay if script_args.use_ema_teacher else None,
+                "use_vcd_opsd": script_args.use_vcd_opsd,
+                "vcd_alpha": script_args.vcd_alpha if script_args.use_vcd_opsd else None,
+                "good_view_field": script_args.good_view_field if script_args.use_vcd_opsd else None,
+                "bad_view_field": script_args.bad_view_field if script_args.use_vcd_opsd else None,
+                "view_pairs": script_args.view_pairs if script_args.use_vcd_opsd else None,
+                "view_field_prefix": script_args.view_field_prefix if script_args.use_vcd_opsd else None,
+                "pair_sampling_strategy": script_args.pair_sampling_strategy if script_args.use_vcd_opsd else None,
+                "dataset_name": script_args.dataset_name,
+                "dataset_config_name": script_args.dataset_config_name,
+                "train_split": script_args.train_split,
+                "problem_field": script_args.problem_field,
+                "solution_field": script_args.solution_field,
+                "use_image_perturbation_pairs": script_args.use_image_perturbation_pairs,
+                "image_field": script_args.image_field if script_args.use_image_perturbation_pairs else None,
+                "image_token": script_args.image_token if script_args.use_image_perturbation_pairs else None,
+                "noise_std": script_args.noise_std if script_args.use_image_perturbation_pairs else None,
+                "mask_ratio": script_args.mask_ratio if script_args.use_image_perturbation_pairs else None,
+                "blur_radius": script_args.blur_radius if script_args.use_image_perturbation_pairs else None,
+                "use_multimodal_processor": script_args.use_multimodal_processor,
+                "use_privileged_visual_teacher": script_args.use_privileged_visual_teacher,
+                "privileged_visual_field": script_args.privileged_visual_field if script_args.use_privileged_visual_teacher else None,
             },
         )
 
@@ -230,14 +385,25 @@ if __name__ == "__main__":
 
     # No separate teacher model needed - we use the same model with privileged info
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path,
-        revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
-        padding_side="left",
-    )
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    if script_args.use_multimodal_processor:
+        processing_class = AutoProcessor.from_pretrained(
+            model_args.model_name_or_path,
+            revision=model_args.model_revision,
+            trust_remote_code=model_args.trust_remote_code,
+        )
+        if hasattr(processing_class, "tokenizer"):
+            processing_class.tokenizer.padding_side = "left"
+            if processing_class.tokenizer.pad_token is None:
+                processing_class.tokenizer.pad_token = processing_class.tokenizer.eos_token
+    else:
+        processing_class = AutoTokenizer.from_pretrained(
+            model_args.model_name_or_path,
+            revision=model_args.model_revision,
+            trust_remote_code=model_args.trust_remote_code,
+            padding_side="left",
+        )
+        if processing_class.pad_token is None:
+            processing_class.pad_token = processing_class.eos_token
 
     ################
     # Dataset
@@ -249,15 +415,18 @@ if __name__ == "__main__":
     # Add presence_penalty to training_args so it can be accessed in the trainer
     training_args.presence_penalty = script_args.presence_penalty
 
-    dataset = load_dataset("siyanzhao/Openthoughts_math_30k_opsd")
-    train_dataset = dataset["train"]
+    if script_args.dataset_config_name:
+        dataset = load_dataset(script_args.dataset_name, script_args.dataset_config_name)
+    else:
+        dataset = load_dataset(script_args.dataset_name)
+    train_dataset = dataset[script_args.train_split]
 
     trainer = OPSDTrainer(
         model=model_args.model_name_or_path,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=None,
-        processing_class=tokenizer,
+        processing_class=processing_class,
         peft_config=get_peft_config(model_args),
         use_thinking_machines_loss=script_args.use_tinker_loss,
         fixed_teacher=script_args.fixed_teacher,
@@ -266,6 +435,23 @@ if __name__ == "__main__":
         jsd_token_clip=script_args.jsd_token_clip if script_args.jsd_token_clip > 0 else None,
         use_ema_teacher=script_args.use_ema_teacher,
         ema_decay=script_args.ema_decay,
+        use_vcd_opsd=script_args.use_vcd_opsd,
+        vcd_alpha=script_args.vcd_alpha,
+        good_view_field=script_args.good_view_field,
+        bad_view_field=script_args.bad_view_field,
+        view_pairs=script_args.view_pairs,
+        view_field_prefix=script_args.view_field_prefix,
+        pair_sampling_strategy=script_args.pair_sampling_strategy,
+        problem_field=script_args.problem_field,
+        solution_field=script_args.solution_field,
+        use_image_perturbation_pairs=script_args.use_image_perturbation_pairs,
+        image_field=script_args.image_field,
+        image_token=script_args.image_token,
+        noise_std=script_args.noise_std,
+        mask_ratio=script_args.mask_ratio,
+        blur_radius=script_args.blur_radius,
+        use_privileged_visual_teacher=script_args.use_privileged_visual_teacher,
+        privileged_visual_field=script_args.privileged_visual_field,
     )
 
     if training_args.eval_strategy != "no":

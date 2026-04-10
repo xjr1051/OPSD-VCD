@@ -1,165 +1,195 @@
-# Self-Distilled Reasoner: On-Policy Self-Distillation for Large Language Models
+# PRISM-OPSD: Privileged Visual Self-Distillation for Grounded VLMs
 
+本仓库是一个新的实验研究项目：在 OPSD 代码基座上，将 VCD 的“原图-扰动图对比”思想迁移到训练阶段，用于降低 VLM 幻觉。
 
-<p align="center">
-<a href="https://arxiv.org/abs/2601.18734"><img src="https://img.shields.io/badge/arXiv-2601.18734-b31b1b.svg"></a>
-<a href="https://siyan-zhao.github.io/blog/2026/opsd/"><img src="https://img.shields.io/badge/Blog-Post-blue.svg"></a>
-</p>
+## 1. 核心想法
 
----
-## Overview
+VCD 告诉我们：对同一图像构造扰动视图，并与 clean 视图做对比解码，可以减轻 hallucination。
 
-**On-Policy Self-Distillation (OPSD)** trains a single model to act as both student and teacher by conditioning on different contexts — the student sees only the problem, while the teacher additionally sees the ground-truth solution — and performs token-level distribution matching along the student's own on-policy trajectories.
+本项目把这一思想改造成训练期范式：
 
+- student 在较弱/扰动视图条件下 on-policy 采样轨迹；
+- teacher 在较强/更事实视图条件下给出监督；
+- teacher 分布通过“teacher-view vs student-view”对比 logits 构造。
 
-## Updates
+适配的 teacher-student 视图对包括但不限于：
 
-- **Mar 18, 2026**: Released updated code. 
+- clean-noise
+- mask-clean
+- clean-blur
+- crop-clean
 
-  (1) Fixed chat template and zero2 bugs (see [template issue](https://github.com/huggingface/trl/issues/5241)), we re-ran experiments with updated results (detailed results & ablations  to be updated on arxiv/blog shortly). The fixes yield improved OPSD performance, most notably on Qwen3-1.7B.
+其中 pair 语义固定为 `teacher-student`。
 
-  (2) Added a new training stabilization strategy 🚀: per-token KL clipping. We find style tokens (such as 'wait', 'think') can exhibit 6–15× higher KL divergence than math-related tokens, and dominates the training signal. Clipping stablizes training and improves performance.
+## 2. 方法定义
 
+我们采用带 privileged visual information 的 VLM-OPSD 目标。定义样本为 $(x, v, z^*, y^*)$：
 
--  **Mar 3, 2026**: Initial code release.
+- $x$：文本问题
+- $v$：图像
+- $z^*$：teacher-only 的特权视觉证据（object list/boxes/masks/scene graph 等）
+- $y^*$：参考答案
 
-## Installation
+student on-policy 采样轨迹：
 
+$$
+\hat y \sim p_S(\cdot \mid x, v)
+$$
+
+token-level distillation 主项：
+
+$$
+\mathcal{L}_{\text{V-OPSD}} =
+\mathbb{E}_{(x,v,z^*)}
+\mathbb{E}_{\hat y \sim p_S(\cdot\mid x,v)}
+\left[
+\frac{1}{|\hat y|}\sum_t
+D\big(
+p_T(\cdot\mid x,v,z^*,\hat y_{<t})
+\Vert
+p_S(\cdot\mid x,v,\hat y_{<t})
+\big)
+\right]
+$$
+
+当前实现严格遵循 OPSD 主目标：on-policy、token-level distillation。
+
+## 3. 当前代码行为
+
+在 `--use_vcd_opsd` 开启时：
+
+- 轨迹来源：student-side 视图（pair 的第二项）；
+- teacher 监督：
+  - 默认模式：pair 的第一项与第二项构造 teacher 分布；
+  - privileged 模式（推荐）：teacher 直接使用 `z^*` 条件给出分布；
+- 支持多对视图组合并按策略采样。
+
+## 4. 关键参数
+
+训练入口在 `opsd_train.py`。
+
+### 4.1 Visual OPSD 相关
+
+- `--use_vcd_opsd`：开启视觉版 OPSD 分支（参数名为兼容保留）。
+- `--vcd_alpha`：对比强度 $\alpha$。
+- `--view_pairs`：teacher-student 视图对列表，例：`clean-noise,mask-clean`。
+- `--view_field_prefix`：视图字段前缀，默认 `problem_`。
+- `--pair_sampling_strategy`：多视图对采样策略：`random | first | round_robin`。
+- `--use_image_perturbation_pairs`：在 collator 内对图像在线扰动并生成视图对。
+- `--image_field`：原始图像列名，默认 `image`。
+- `--image_token`：多模态提示中的图像占位符，默认 `<image>`。
+- `--noise_std` / `--mask_ratio` / `--blur_radius`：在线扰动参数。
+- `--use_multimodal_processor`：加载 `AutoProcessor`（图片训练必需）。
+- `--use_privileged_visual_teacher`：启用 teacher-only 的 privileged visual evidence 条件。
+- `--privileged_visual_field`：数据中的 `z^*` 字段名。
+
+### 4.2 数据源与字段（已改为可配置）
+
+- `--dataset_name`：HF 数据集名或本地路径。
+- `--dataset_config_name`：可选 config。
+- `--train_split`：训练 split。
+- `--problem_field`：基础问题字段。
+- `--solution_field`：参考解字段。
+
+### 4.3 兼容回退字段
+
+若 pair 对应字段不存在，会回退到：
+
+- `--good_view_field`（teacher/factual 视图）
+- `--bad_view_field`（student/perturbed 视图）
+
+## 5. 数据格式
+
+最推荐的数据列组织方式（在线图片扰动模式）：
+
+- 基础列：
+  - `problem`
+  - `solution`
+- 图像列：
+  - `image`
+- 特权视觉证据列：
+  - `privileged_visual_evidence`
+
+可选的数据列组织方式（离线视图文本模式）：
+
+- 视图列（由前缀 + tag 组成，或 legacy good/bad）：
+  - `problem_clean`
+  - `problem_noise`
+  - `problem_mask`
+  - ...
+
+如果 `--view_pairs clean-noise,mask-clean`，代码会查找：
+
+- `problem_clean` + `problem_noise`
+- `problem_mask` + `problem_clean`
+
+并按 `--pair_sampling_strategy` 选择当步使用的 pair。
+
+## 6. 快速开始
+
+### 6.1 安装
 
 ```bash
 conda env create -f environment.yml
 conda activate opsd
-```
-
-```bash
 pip install flash-attn==2.8.3 --no-build-isolation
 ```
-If you encounter difficulties installing flash-attn, you can check the version matching your CUDA and PyTorch versions from the [flash-attention releases page](https://github.com/Dao-AILab/flash-attention/releases).
 
-The code uses `trl`'s experimental GOLD trainer as a base.
-
-## Repository Structure
-
-```
-├── opsd_trainer.py          # OPSDTrainer: core self-distillation trainer
-├── data_collator.py         # Data collator for self-distillation
-├── opsd_train.py            # OPSD training entry point
-├── sft_train.py             # SFT baseline training entry point
-├── grpo_train.py            # GRPO baseline training entry point
-├── accelerate.yaml          # Accelerate config (multi-GPU)
-├── scripts/
-│   ├── run_opsd.sh          # Example launch script for OPSD
-│   ├── run_sft.sh           # Example launch script for SFT
-│   └── run_grpo.sh          # Example launch script for GRPO
-└── eval/
-    ├── evaluate_math.py     # Evaluation script (vLLM)
-    └── run_eval.sh          # Example evaluation script
-```
-
-## Quick Start
-
-Reproduce results on Qwen3-1.7B (🚀 training only takes **~15 minutes** on 4×H100 and peaks within 100 steps):
+### 6.2 运行示例
 
 ```bash
-bash scripts/run_opsd_1b.sh
-```
-Evaluation: (evaluation takes ~ 30-50 minutes on 4xh100 for each checkpoint) 
-```bash
-cd eval
-bash run_eval.sh
+bash scripts/run_opsd_vcd_skeleton.sh
 ```
 
-### Evaluation Results across Tasks on Qwen3-1.7B
+脚本已包含：
 
-<div align="center">
-<table>
-<tr>
-<th align="center">AIME24</th>
-<th align="center">AIME25</th>
-<th align="center">HMMT25</th>
-</tr>
-<tr>
-<td>
+- `--use_vcd_opsd`
+- `--use_multimodal_processor`
+- `--use_image_perturbation_pairs`
+- `--use_privileged_visual_teacher`
+- `--view_pairs clean-noise,mask-clean`
+- `--pair_sampling_strategy random`
 
-| Step | Avg@12 |
-|---|---|
-| Base | 51.5% |
-| 25 | 51.4% |
-| 50 | 52.8% |
-| 75 | 54.4% |
-| 100 | 57.2% |
+## 7. 推荐实验矩阵
 
-</td>
-<td>
+建议最小实验集：
 
-| Step | Avg@12 |
-|---|---|
-| Base | 36.7% |
-| 25 | 42.5% |
-| 50 | 43.9% |
-| 75 | 40.6% |
-| 100 | 41.1% |
+- alpha 扫描：$\alpha \in \{0.25, 0.5, 1.0, 2.0\}$
+- pair 组合：
+  - clean-noise
+  - mask-clean
+  - clean-noise,mask-clean（联合）
+- 采样策略：
+  - random
+  - round_robin
 
-</td>
-<td>
+对照组：
 
-| Step | Avg@12 |
-|---|---|
-| Base | 23.1% |
-| 25 | 24.7% |
-| 50 | 27.8% |
-| 75 | 26.9% |
-| 100 | 29.2% |
+- OPSD baseline（关闭 `--use_vcd_opsd`）
+- PRISM-OPSD（开启 `--use_vcd_opsd` + `--use_privileged_visual_teacher`）
 
-</td>
-</tr>
-</table>
-</div>
+## 8. 评估建议
 
-> **Evaluation settings:** temperature=1.0, thinking mode enabled, max new tokens=38912, top-p=none, top-k disabled, min-p=0, presence penalty=0, num samples=12
+建议至少报告以下指标：
 
+- 任务准确率（task accuracy）
+- 幻觉率/事实一致性（hallucination or faithfulness metric）
+- 稳定性统计（loss 波动、长度分布、梯度范数）
 
-## Training
+## 9. 重要说明
 
+- 该实现是“训练期融合骨架”，用于将视图对比偏好蒸馏进参数。
+- 当前版本已经支持在 collator 中在线生成 clean/noise/mask/blur 视图对。
+- `use_image_perturbation_pairs=True` 时，当前不支持 `use_vllm`，请使用 transformers 生成路径。
+- 如使用特定 VLM（如 Qwen-VL/LLaVA），请确保 `image_token` 与模型模板一致。
 
-### OPSD
+## 10. 仓库结构（核心）
 
-See 
+- `opsd_train.py`：训练入口与参数定义。
+- `data_collator.py`：teacher-student 视图对组装。
+- `opsd_trainer.py`：on-policy 轨迹 + token-level self-distillation 蒸馏。
+- `scripts/run_opsd_vcd_skeleton.sh`：示例启动脚本。
 
-[`scripts/run_opsd_1b.sh`](scripts/run_opsd_1b.sh).
-[`scripts/run_opsd_4b.sh`](scripts/run_opsd_4b.sh).
-[`scripts/run_opsd_8b.sh`](scripts/run_opsd_8b.sh).
+---
 
-#### Key OPSD arguments
-
-| Argument | Default | Description |
-|---|---|---|
-| `--fixed_teacher` | `False` | Fix the teacher to the initial policy (step 0). Requires `--use_peft`. Recommended. |
-| `--use_tinker_loss` | `False` | Use sampled-token policy-gradient objective instead of full-vocabulary JSD. More memory efficient. |
-| `--max_completion_length` | — | Student generation length for distillation. We use 1024 in our main experiments. |
-| `--beta` | — | Interpolation weight for the JSD mixture distribution. |
-| `--jsd_token_clip` | — | Clip the JSD loss for each token to a maximum value. This can improve stability by preventing stylistic tokens from dominating the training signal. | 
-| `--reason_first` | `False` | Prepend an explicit rationalization to the teacher context before distillation. |
-| `--run_config` | `None` | Custom name suffix for the output directory and WandB run. |
-
-### SFT Baseline
-
-See [`scripts/run_sft.sh`](scripts/run_sft.sh).
-
-### GRPO Baseline
-
-See [`scripts/run_grpo.sh`](scripts/run_grpo.sh).
-
-### Acknowledgements
-Our implementation builds on [TRL GOLD Trainer](https://huggingface.co/docs/trl/gold_trainer). We sincerely thank [@simran135](https://github.com/simran135) and [@beanie00](https://github.com/beanie00) for identifying the prompt template bugs and the zero-2 issue, respectively!
-
-## Citation
-If you find this useful, please consider citing:
-```bibtex
-@article{zhao2026self,
-  title={Self-Distilled Reasoner: On-Policy Self-Distillation for Large Language Models},
-  author={Zhao, Siyan and Xie, Zhihui and Liu, Mengchen and Huang, Jing and Pang, Guan and Chen, Feiyu and Grover, Aditya},
-  journal={arXiv preprint arXiv:2601.18734},
-  year={2026}
-}
-```
+如果你继续扩展新的扰动类型（如 occlusion grid、JPEG、color jitter），建议仅在 `data_collator.py` 新增 perturb tag 映射，训练主干可保持不变。

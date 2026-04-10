@@ -142,6 +142,23 @@ class OPSDTrainer(SFTTrainer):
         jsd_token_clip: float | None = None,
         use_ema_teacher: bool = False,
         ema_decay: float = 0.999,
+        use_vcd_opsd: bool = False,
+        vcd_alpha: float = 1.0,
+        good_view_field: str = "problem_good_view",
+        bad_view_field: str = "problem_bad_view",
+        view_pairs: str = "clean-noise,mask-clean",
+        view_field_prefix: str = "problem_",
+        pair_sampling_strategy: str = "random",
+        problem_field: str = "problem",
+        solution_field: str = "solution",
+        use_image_perturbation_pairs: bool = False,
+        image_field: str = "image",
+        image_token: str = "<image>",
+        noise_std: float = 25.0,
+        mask_ratio: float = 0.25,
+        blur_radius: float = 2.0,
+        use_privileged_visual_teacher: bool = False,
+        privileged_visual_field: str = "privileged_visual_evidence",
     ):
         self.model_name_or_path = model if isinstance(model, str) else model.config._name_or_path
         self.model_revision = getattr(args, "student_model_revision", None)
@@ -152,7 +169,25 @@ class OPSDTrainer(SFTTrainer):
         # Custom data collator for self-distillation
         if data_collator is None:
             data_collator = SelfDistillationDataCollator(
-                tokenizer=processing_class, max_length=args.max_length, reason_first=reason_first
+                tokenizer=processing_class,
+                max_length=args.max_length,
+                reason_first=reason_first,
+                enable_vcd_opsd=use_vcd_opsd,
+                good_view_field=good_view_field,
+                bad_view_field=bad_view_field,
+                view_pairs=view_pairs,
+                view_field_prefix=view_field_prefix,
+                pair_sampling_strategy=pair_sampling_strategy,
+                problem_field=problem_field,
+                solution_field=solution_field,
+                use_image_perturbation_pairs=use_image_perturbation_pairs,
+                image_field=image_field,
+                image_token=image_token,
+                noise_std=noise_std,
+                mask_ratio=mask_ratio,
+                blur_radius=blur_radius,
+                use_privileged_visual_teacher=use_privileged_visual_teacher,
+                privileged_visual_field=privileged_visual_field,
             )
 
         super().__init__(
@@ -169,6 +204,16 @@ class OPSDTrainer(SFTTrainer):
             peft_config=peft_config,
         )
 
+        # Support both tokenizer-only and processor-based multimodal setups.
+        self.pad_token_id = getattr(self.processing_class, "pad_token_id", None)
+        self.pad_token_text = getattr(self.processing_class, "pad_token", None)
+        if hasattr(self.processing_class, "tokenizer"):
+            tok = self.processing_class.tokenizer
+            if self.pad_token_id is None:
+                self.pad_token_id = getattr(tok, "pad_token_id", None)
+            if self.pad_token_text is None:
+                self.pad_token_text = getattr(tok, "pad_token", None)
+
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
 
@@ -184,6 +229,23 @@ class OPSDTrainer(SFTTrainer):
         self.jsd_token_clip = jsd_token_clip
         self.use_ema_teacher = use_ema_teacher
         self.ema_decay = ema_decay
+        self.use_vcd_opsd = use_vcd_opsd
+        self.vcd_alpha = vcd_alpha
+        self.good_view_field = good_view_field
+        self.bad_view_field = bad_view_field
+        self.view_pairs = SelfDistillationDataCollator._parse_view_pairs(view_pairs)
+        self.view_field_prefix = view_field_prefix
+        self.pair_sampling_strategy = pair_sampling_strategy
+        self.problem_field = problem_field
+        self.solution_field = solution_field
+        self.use_image_perturbation_pairs = use_image_perturbation_pairs
+        self.image_field = image_field
+        self.image_token = image_token
+        self.noise_std = noise_std
+        self.mask_ratio = mask_ratio
+        self.blur_radius = blur_radius
+        self.use_privileged_visual_teacher = use_privileged_visual_teacher
+        self.privileged_visual_field = privileged_visual_field
         self._ema_params = None  # lazily initialized on first optimizer step
 
         # Validate fixed_teacher option
@@ -197,6 +259,15 @@ class OPSDTrainer(SFTTrainer):
             raise ValueError(
                 "use_ema_teacher=True and fixed_teacher=True are mutually exclusive teacher strategies."
             )
+
+        if self.use_vcd_opsd and self.reason_first:
+            raise ValueError("use_vcd_opsd=True and reason_first=True are mutually exclusive modes.")
+
+        if self.use_image_perturbation_pairs and not self.use_vcd_opsd:
+            raise ValueError("use_image_perturbation_pairs=True requires use_vcd_opsd=True.")
+
+        if self.use_privileged_visual_teacher and self.reason_first:
+            raise ValueError("use_privileged_visual_teacher=True is not supported with reason_first=True.")
 
         if self.use_ema_teacher:
             self.add_callback(EMAUpdateCallback(self))
@@ -220,6 +291,31 @@ class OPSDTrainer(SFTTrainer):
             print("Teacher will first reason about the privileged solution, then evaluate student's response")
             print(f"{'='*80}\n")
 
+        if self.use_vcd_opsd:
+            print(f"\n{'='*80}")
+            print("VISUAL OPSD MODE ENABLED")
+            print(f"Contrastive teacher alpha: {self.vcd_alpha}")
+            print(f"Teacher-student view pairs: {self.view_pairs}")
+            print(f"View field prefix: {self.view_field_prefix}")
+            print(f"Pair sampling strategy: {self.pair_sampling_strategy}")
+            print(f"Online image perturbation pairs: {self.use_image_perturbation_pairs}")
+            if self.use_image_perturbation_pairs:
+                print(f"Image field: {self.image_field}")
+                print(
+                    f"Perturb params -> noise_std: {self.noise_std}, mask_ratio: {self.mask_ratio}, blur_radius: {self.blur_radius}"
+                )
+            print(
+                "Student trajectories are sampled on student-side views from each pair; "
+                "teacher supervision uses stronger or privileged visual evidence."
+            )
+            print(
+                f"Legacy fallback fields -> teacher: {self.good_view_field}, student: {self.bad_view_field}"
+            )
+            print(f"Privileged visual teacher: {self.use_privileged_visual_teacher}")
+            if self.use_privileged_visual_teacher:
+                print(f"Privileged visual field: {self.privileged_visual_field}")
+            print(f"{'='*80}\n")
+
         # Track per-step loss statistics for on/off-policy batches (used in logging)
         self._on_policy_loss_total = 0.0
         self._off_policy_loss_total = 0.0
@@ -238,7 +334,7 @@ class OPSDTrainer(SFTTrainer):
             top_p=args.top_p,
             do_sample=True,
             top_k=args.top_k,
-            pad_token_id=self.processing_class.pad_token_id,
+            pad_token_id=self.pad_token_id,
             use_cache=True,
         )
         if (
@@ -255,7 +351,7 @@ class OPSDTrainer(SFTTrainer):
             top_p=args.top_p,
             do_sample=True,
             top_k=args.top_k,
-            pad_token_id=self.processing_class.pad_token_id,
+            pad_token_id=self.pad_token_id,
             use_cache=True,
         )
         if (
@@ -282,6 +378,11 @@ class OPSDTrainer(SFTTrainer):
         }
 
         self.use_vllm = args.use_vllm
+        if self.use_vllm and self.use_image_perturbation_pairs:
+            raise ValueError(
+                "use_vllm is not supported with use_image_perturbation_pairs in this baseline. "
+                "Please disable use_vllm and use transformers generation."
+            )
         if self.use_vllm:
             if not is_vllm_available():
                 raise ImportError(
@@ -362,9 +463,19 @@ class OPSDTrainer(SFTTrainer):
     def _set_signature_columns_if_needed(self):
         super()._set_signature_columns_if_needed()
         required_columns = [
-            "problem",
-            "solution",
+            self.problem_field,
+            self.solution_field,
         ]
+        if self.use_privileged_visual_teacher:
+            required_columns.append(self.privileged_visual_field)
+        if self.use_vcd_opsd:
+            if self.use_image_perturbation_pairs:
+                required_columns.append(self.image_field)
+            else:
+                required_columns.extend([self.good_view_field, self.bad_view_field])
+                for teacher_tag, student_tag in self.view_pairs:
+                    required_columns.append(f"{self.view_field_prefix}{teacher_tag}")
+                    required_columns.append(f"{self.view_field_prefix}{student_tag}")
         if self._signature_columns is None:
             self._signature_columns = required_columns
         else:
@@ -617,6 +728,15 @@ class OPSDTrainer(SFTTrainer):
                     if name in saved:
                         param.data = saved[name]
 
+    @staticmethod
+    def _collect_multimodal_kwargs(inputs, prefix):
+        kwargs = {}
+        for key in ("pixel_values", "image_grid_thw", "pixel_values_videos", "video_grid_thw"):
+            full_key = f"{prefix}_{key}"
+            if full_key in inputs:
+                kwargs[key] = inputs[full_key]
+        return kwargs
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
         Compute the self-distillation loss with memory-efficient log-prob extraction.
@@ -625,14 +745,15 @@ class OPSDTrainer(SFTTrainer):
         """
         # Get batch-level prompt lengths
         student_prompt_len = inputs["student_prompt_length"]
-        teacher_prompt_len = inputs["teacher_prompt_length"]
         sampled_token_ids = inputs["student_input_ids"][:, student_prompt_len:]
         shifted_labels = inputs["labels"][:, student_prompt_len:]
+        student_mm_kwargs = self._collect_multimodal_kwargs(inputs, "student")
 
         # === STUDENT FORWARD - Extract log-probs immediately ===
         outputs_student = model(
             input_ids=inputs["student_input_ids"],
             attention_mask=inputs["student_attention_mask"],
+            **student_mm_kwargs,
         )
 
         # Extract only what we need and convert to log-probs immediately
@@ -675,12 +796,43 @@ class OPSDTrainer(SFTTrainer):
             adapter_context = nullcontext()
 
         with torch.no_grad(), adapter_context:
-            outputs_teacher = model(
-                input_ids=inputs["teacher_input_ids"],
-                attention_mask=inputs["teacher_attention_mask"],
-            )
+            if self.use_vcd_opsd and not self.use_privileged_visual_teacher:
+                # OPSD-on-VCD: keep on-policy trajectory from student, and only replace
+                # the teacher target distribution with VCD-style contrastive logits.
+                teacher_good_prompt_len = inputs["teacher_good_prompt_length"]
+                teacher_bad_prompt_len = inputs["teacher_bad_prompt_length"]
 
-            teacher_logits = outputs_teacher.logits[:, teacher_prompt_len - 1 : -1, :]
+                outputs_teacher_good = model(
+                    input_ids=inputs["teacher_good_input_ids"],
+                    attention_mask=inputs["teacher_good_attention_mask"],
+                    **self._collect_multimodal_kwargs(inputs, "teacher_good"),
+                )
+                outputs_teacher_bad = model(
+                    input_ids=inputs["teacher_bad_input_ids"],
+                    attention_mask=inputs["teacher_bad_attention_mask"],
+                    **self._collect_multimodal_kwargs(inputs, "teacher_bad"),
+                )
+
+                teacher_good_logits = outputs_teacher_good.logits[
+                    :, teacher_good_prompt_len - 1 : -1, :
+                ]
+                teacher_bad_logits = outputs_teacher_bad.logits[
+                    :, teacher_bad_prompt_len - 1 : -1, :
+                ]
+                teacher_logits = (1.0 + self.vcd_alpha) * teacher_good_logits - self.vcd_alpha * teacher_bad_logits
+
+                del outputs_teacher_good, outputs_teacher_bad
+                del teacher_good_logits, teacher_bad_logits
+            else:
+                teacher_prompt_len = inputs["teacher_prompt_length"]
+                outputs_teacher = model(
+                    input_ids=inputs["teacher_input_ids"],
+                    attention_mask=inputs["teacher_attention_mask"],
+                    **self._collect_multimodal_kwargs(inputs, "teacher"),
+                )
+
+                teacher_logits = outputs_teacher.logits[:, teacher_prompt_len - 1 : -1, :]
+                del outputs_teacher
 
             if self.use_thinking_machines_loss:
                 teacher_log_probs = F.log_softmax(teacher_logits / self.temperature, dim=-1)
@@ -691,8 +843,6 @@ class OPSDTrainer(SFTTrainer):
             else:
                 teacher_logits_for_loss = teacher_logits
                 del teacher_logits
-
-            del outputs_teacher
             empty_cache()
 
         # === COMPUTE LOSS with only small tensors ===
@@ -717,7 +867,7 @@ class OPSDTrainer(SFTTrainer):
 
             # Policy gradient loss: -advantage * log π_student
             # Negative because we minimize loss (gradient descent), but want to maximize reward
-            loss = -(advantage * student_log_probs_sampled_masked).mean()
+            distill_loss = -(advantage * student_log_probs_sampled_masked).mean()
 
             del (
                 student_log_probs_sampled,
@@ -727,7 +877,7 @@ class OPSDTrainer(SFTTrainer):
             )
         else:
             # Temperature is applied inside generalized_jsd_loss
-            loss = self.generalized_jsd_loss(
+            distill_loss = self.generalized_jsd_loss(
                 student_logits=student_logits_for_loss,
                 teacher_logits=teacher_logits_for_loss,
                 labels=shifted_labels,
@@ -737,6 +887,13 @@ class OPSDTrainer(SFTTrainer):
                 token_clip=self.jsd_token_clip,
             )
             del student_logits_for_loss, teacher_logits_for_loss
+
+        # Strict visual OPSD objective: on-policy token-level distillation only.
+        loss = distill_loss
+
+        mode = "train" if model.training else "eval"
+        self._metrics[mode]["loss_distill"].append(float(distill_loss.detach()))
+        self._metrics[mode]["loss_total"].append(float(loss.detach()))
 
         empty_cache()
 
@@ -810,6 +967,8 @@ class OPSDTrainer(SFTTrainer):
         print(f"  Max new tokens: {generation_config.max_new_tokens}")
         print(f"{'='*80}\n")
 
+        generation_mm_kwargs = self._collect_multimodal_kwargs(inputs, "student_prompt")
+
         # Generate output with respect to the student prompt only
         try:
             generated_outputs = model.generate(
@@ -818,6 +977,7 @@ class OPSDTrainer(SFTTrainer):
                 generation_config=generation_config,
                 return_dict_in_generate=True,
                 use_cache=True,
+                **generation_mm_kwargs,
             )
             # Get the generated token IDs
             generated_tokens = generated_outputs.sequences
@@ -857,9 +1017,9 @@ class OPSDTrainer(SFTTrainer):
             skip_special_tokens=False,
         )
         # Remove padding token text if it appears, as vLLM expects clean prompts
-        if self.processing_class.pad_token:
+        if self.pad_token_text:
             prompts_text_for_vllm = [
-                p.replace(self.processing_class.pad_token, "") for p in prompts_text_for_vllm
+                p.replace(self.pad_token_text, "") for p in prompts_text_for_vllm
             ]
 
         # Also decode prompts WITH special tokens for logging
@@ -1047,8 +1207,8 @@ class OPSDTrainer(SFTTrainer):
             teacher_reasoning_prompts,
             skip_special_tokens=True,
         )
-        if self.processing_class.pad_token:
-            prompts_text = [p.replace(self.processing_class.pad_token, "") for p in prompts_text]
+        if self.pad_token_text:
+            prompts_text = [p.replace(self.pad_token_text, "") for p in prompts_text]
 
         max_reasoning_length = self.reasoning_generation_config.max_new_tokens
         temperature = self.reasoning_generation_config.temperature
@@ -1129,9 +1289,7 @@ class OPSDTrainer(SFTTrainer):
         prompt_ids = prompt_tokenized.input_ids
 
         completion_ids_tensors = [torch.tensor(ids, device=device) for ids in completion_ids]
-        padded_completions = pad(
-            completion_ids_tensors, padding_value=self.processing_class.pad_token_id, padding_side="right"
-        )
+        padded_completions = pad(completion_ids_tensors, padding_value=self.pad_token_id, padding_side="right")
 
         reasoning_ids = torch.cat([prompt_ids, padded_completions], dim=1)
 
@@ -1348,24 +1506,25 @@ class OPSDTrainer(SFTTrainer):
                 # Update inputs with new teacher prompts
                 inputs["teacher_prompts"] = teacher_prompts_with_reasoning
                 teacher_attention_mask = torch.ones_like(teacher_prompts_with_reasoning)
-                if self.processing_class.pad_token_id is not None:
+                if self.pad_token_id is not None:
                     teacher_attention_mask[
-                        teacher_prompts_with_reasoning == self.processing_class.pad_token_id
+                        teacher_prompts_with_reasoning == self.pad_token_id
                     ] = 0
                 inputs["teacher_prompt_attention_mask"] = teacher_attention_mask
                 inputs["teacher_prompt_length"] = teacher_prompts_with_reasoning.shape[1]
 
         # === GENERATION PHASE ===
+        # OPSD principle: trajectories are always sampled from student prompts.
         if self.use_vllm:
             self._wake_vllm_if_needed()
             result = self._generate_on_policy_outputs_vllm(
-                inputs, self.generation_config, self.processing_class.pad_token_id
+                inputs, self.generation_config, self.pad_token_id
             )
             generated_ids, generated_attention_mask, _, prompt_texts, completion_texts = result
         else:
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                 result = self.generate_on_policy_outputs(
-                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
+                    unwrapped_model, inputs, self.generation_config, self.pad_token_id
                 )
                 generated_ids, generated_attention_mask, _ = result
                 # Decode for logging
@@ -1387,18 +1546,64 @@ class OPSDTrainer(SFTTrainer):
         # Construct student full sequence: [student_prompt][generation]
         inputs["student_input_ids"] = generated_ids
         inputs["student_attention_mask"] = generated_attention_mask
+        for key in ("pixel_values", "image_grid_thw", "pixel_values_videos", "video_grid_thw"):
+            prompt_key = f"student_prompt_{key}"
+            if prompt_key in inputs:
+                inputs[f"student_{key}"] = inputs[prompt_key]
 
-        # Construct teacher full sequence: [teacher_prompt][generation]
-        teacher_prompts = inputs["teacher_prompts"]
-        teacher_full_ids = torch.cat([teacher_prompts, generation_ids], dim=1)
+        if self.use_vcd_opsd and not self.use_privileged_visual_teacher:
+            # Build two teacher branches using the same sampled trajectory.
+            teacher_good_prompts = inputs["teacher_good_prompts"]
+            teacher_bad_prompts = inputs["teacher_bad_prompts"]
 
-        # Create attention mask for teacher
-        teacher_attention_mask = torch.ones_like(teacher_full_ids)
-        if self.processing_class.pad_token_id is not None:
-            teacher_attention_mask[teacher_full_ids == self.processing_class.pad_token_id] = 0
+            teacher_good_full_ids = torch.cat([teacher_good_prompts, generation_ids], dim=1)
+            teacher_bad_full_ids = torch.cat([teacher_bad_prompts, generation_ids], dim=1)
 
-        inputs["teacher_input_ids"] = teacher_full_ids
-        inputs["teacher_attention_mask"] = teacher_attention_mask
+            teacher_good_attention_mask = torch.ones_like(teacher_good_full_ids)
+            teacher_bad_attention_mask = torch.ones_like(teacher_bad_full_ids)
+            if self.pad_token_id is not None:
+                teacher_good_attention_mask[
+                    teacher_good_full_ids == self.pad_token_id
+                ] = 0
+                teacher_bad_attention_mask[
+                    teacher_bad_full_ids == self.pad_token_id
+                ] = 0
+
+            inputs["teacher_good_input_ids"] = teacher_good_full_ids
+            inputs["teacher_good_attention_mask"] = teacher_good_attention_mask
+            inputs["teacher_bad_input_ids"] = teacher_bad_full_ids
+            inputs["teacher_bad_attention_mask"] = teacher_bad_attention_mask
+            for key in ("pixel_values", "image_grid_thw", "pixel_values_videos", "video_grid_thw"):
+                good_prompt_key = f"teacher_good_prompt_{key}"
+                bad_prompt_key = f"teacher_bad_prompt_{key}"
+                if good_prompt_key in inputs:
+                    inputs[f"teacher_good_{key}"] = inputs[good_prompt_key]
+                if bad_prompt_key in inputs:
+                    inputs[f"teacher_bad_{key}"] = inputs[bad_prompt_key]
+
+            # Keep baseline aliases for compatibility with downstream utilities.
+            inputs["teacher_input_ids"] = teacher_good_full_ids
+            inputs["teacher_attention_mask"] = teacher_good_attention_mask
+            for key in ("pixel_values", "image_grid_thw", "pixel_values_videos", "video_grid_thw"):
+                good_key = f"teacher_good_{key}"
+                if good_key in inputs:
+                    inputs[f"teacher_{key}"] = inputs[good_key]
+        else:
+            # Construct teacher full sequence: [teacher_prompt][generation]
+            teacher_prompts = inputs["teacher_prompts"]
+            teacher_full_ids = torch.cat([teacher_prompts, generation_ids], dim=1)
+
+            # Create attention mask for teacher
+            teacher_attention_mask = torch.ones_like(teacher_full_ids)
+            if self.pad_token_id is not None:
+                teacher_attention_mask[teacher_full_ids == self.pad_token_id] = 0
+
+            inputs["teacher_input_ids"] = teacher_full_ids
+            inputs["teacher_attention_mask"] = teacher_attention_mask
+            for key in ("pixel_values", "image_grid_thw", "pixel_values_videos", "video_grid_thw"):
+                prompt_key = f"teacher_prompt_{key}"
+                if prompt_key in inputs:
+                    inputs[f"teacher_{key}"] = inputs[prompt_key]
 
         # Create labels for generation tokens
         # Mask prompt tokens (use per-example lengths for accurate masking)
@@ -1407,8 +1612,8 @@ class OPSDTrainer(SFTTrainer):
             actual_prompt_len = inputs["student_prompt_lengths_per_example"][i].item()
             labels[i, :actual_prompt_len] = -100  # Mask actual prompt
 
-        if self.processing_class.pad_token_id is not None:
-            labels[labels == self.processing_class.pad_token_id] = -100
+        if self.pad_token_id is not None:
+            labels[labels == self.pad_token_id] = -100
 
         inputs["labels"] = labels
 
