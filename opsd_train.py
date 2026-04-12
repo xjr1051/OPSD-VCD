@@ -224,6 +224,16 @@ if __name__ == "__main__":
     parser = TrlParser((CustomScriptArguments, GOLDConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
 
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    local_rank = int(os.environ.get("LOCAL_RANK", "-1"))
+    is_distributed_launch = world_size > 1 or local_rank >= 0
+    if is_distributed_launch and getattr(training_args, "gradient_checkpointing", False):
+        print(
+            "[launch] Disabling gradient_checkpointing in distributed mode "
+            "to avoid DDP reentrant-backward conflicts."
+        )
+        training_args.gradient_checkpointing = False
+
     ################
     # WandB Run Name & Output Directory
     ################
@@ -231,7 +241,7 @@ if __name__ == "__main__":
     lr_str = f"{training_args.learning_rate:.0e}".replace("e-0", "e-")
 
     # Get number of processes from environment (set by accelerate launch)
-    num_processes = int(os.environ.get("WORLD_SIZE", 1))
+    num_processes = world_size
 
     # Calculate effective batch size
     effective_batch_size = (
@@ -376,21 +386,51 @@ if __name__ == "__main__":
         use_cache=False if training_args.gradient_checkpointing else True,
     )
     quantization_config = get_quantization_config(model_args)
+    print(
+        f"[launch] WORLD_SIZE={world_size}, LOCAL_RANK={local_rank}, "
+        f"quantization_config={'set' if quantization_config is not None else 'none'}"
+    )
+
+    if is_distributed_launch and quantization_config is not None:
+        # In distributed mode, the k-bit loading path may route through a
+        # device_map='auto' branch, which is incompatible with DDP/Accelerate.
+        # For small/medium models this full-precision load is typically stable.
+        print(
+            "[launch] Detected distributed run with k-bit quantization config; "
+            "disabling quantization to avoid device_map=auto incompatibility."
+        )
+        quantization_config = None
+
     if quantization_config is not None:
         # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
         model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
 
+    if is_distributed_launch:
+        # TRL's create_model_from_path defaults to device_map='auto' when this
+        # key is absent. In DDP that can trigger Accelerate's device-map guard.
+        # We set it explicitly to None so each DDP worker keeps a single-device
+        # placement path and avoids pre-sharded multi-device model states.
+        model_kwargs["device_map"] = None
+
     training_args.model_init_kwargs = model_kwargs
 
     # No separate teacher model needed - we use the same model with privileged info
 
+    # `AutoProcessor` is required for multimodal models because it bundles
+    # tokenizer + image/video preprocessing in one object.
+    # For text-only runs we keep using `AutoTokenizer` to avoid introducing
+    # unnecessary processor-side behavior differences.
     if script_args.use_multimodal_processor:
         processing_class = AutoProcessor.from_pretrained(
             model_args.model_name_or_path,
             revision=model_args.model_revision,
             trust_remote_code=model_args.trust_remote_code,
+            use_fast=False,
         )
+        # Some processors expose `pad_token_*` on an inner tokenizer only.
+        # We normalize padding behavior here so generation/collation code can
+        # reliably use left-padding and a valid pad token id.
         if hasattr(processing_class, "tokenizer"):
             processing_class.tokenizer.padding_side = "left"
             if processing_class.tokenizer.pad_token is None:
@@ -415,12 +455,24 @@ if __name__ == "__main__":
     # Add presence_penalty to training_args so it can be accessed in the trainer
     training_args.presence_penalty = script_args.presence_penalty
 
+    # Keep dataset loading fully configurable so the same training script can
+    # be reused across different VCD/OPSD datasets without code changes.
     if script_args.dataset_config_name:
+        print(
+            f"[stage] loading dataset name={script_args.dataset_name}, config={script_args.dataset_config_name}, split={script_args.train_split}"
+        )
         dataset = load_dataset(script_args.dataset_name, script_args.dataset_config_name)
     else:
+        print(
+            f"[stage] loading dataset name={script_args.dataset_name}, split={script_args.train_split}"
+        )
         dataset = load_dataset(script_args.dataset_name)
     train_dataset = dataset[script_args.train_split]
+    print(f"[stage] dataset loaded: split={script_args.train_split}, size={len(train_dataset)}")
 
+    # Pass all view/pair and multimodal options to the trainer so batching,
+    # generation and loss computation share one consistent configuration source.
+    print("[stage] initializing OPSDTrainer")
     trainer = OPSDTrainer(
         model=model_args.model_name_or_path,
         args=training_args,
@@ -453,6 +505,7 @@ if __name__ == "__main__":
         use_privileged_visual_teacher=script_args.use_privileged_visual_teacher,
         privileged_visual_field=script_args.privileged_visual_field,
     )
+    print("[stage] OPSDTrainer initialized")
 
     if training_args.eval_strategy != "no":
         generation_config = GenerationConfig(
@@ -463,6 +516,7 @@ if __name__ == "__main__":
         completions_callback = LogCompletionsCallback(trainer, generation_config, num_prompts=8)
         trainer.add_callback(completions_callback)
 
+    print("[stage] entering trainer.train()")
     trainer.train()
 
     trainer.save_model(training_args.output_dir)

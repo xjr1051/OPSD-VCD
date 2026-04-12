@@ -166,7 +166,9 @@ class OPSDTrainer(SFTTrainer):
             args.model_init_kwargs = args.model_init_kwargs or {}
             args.model_init_kwargs.setdefault("revision", self.model_revision)
 
-        # Custom data collator for self-distillation
+        # Build a collator that prepares all prompt variants required by the
+        # selected teacher strategy (baseline, reason-first, VCD pairing,
+        # image perturbation, privileged visual teacher).
         if data_collator is None:
             data_collator = SelfDistillationDataCollator(
                 tokenizer=processing_class,
@@ -204,7 +206,9 @@ class OPSDTrainer(SFTTrainer):
             peft_config=peft_config,
         )
 
-        # Support both tokenizer-only and processor-based multimodal setups.
+        # Unify pad token access for both plain tokenizers and processor-based
+        # multimodal pipelines. Downstream generation/masking code only depends
+        # on `self.pad_token_id` / `self.pad_token_text`.
         self.pad_token_id = getattr(self.processing_class, "pad_token_id", None)
         self.pad_token_text = getattr(self.processing_class, "pad_token", None)
         if hasattr(self.processing_class, "tokenizer"):
@@ -233,6 +237,8 @@ class OPSDTrainer(SFTTrainer):
         self.vcd_alpha = vcd_alpha
         self.good_view_field = good_view_field
         self.bad_view_field = bad_view_field
+        # Parse once at init so all steps use the same canonical
+        # [(teacher_tag, student_tag), ...] representation.
         self.view_pairs = SelfDistillationDataCollator._parse_view_pairs(view_pairs)
         self.view_field_prefix = view_field_prefix
         self.pair_sampling_strategy = pair_sampling_strategy
@@ -730,6 +736,9 @@ class OPSDTrainer(SFTTrainer):
 
     @staticmethod
     def _collect_multimodal_kwargs(inputs, prefix):
+        # Collect branch-scoped multimodal tensors. Example:
+        # prefix="student" -> student_pixel_values, student_image_grid_thw, ...
+        # This keeps model(...) call sites concise and avoids repetitive key checks.
         kwargs = {}
         for key in ("pixel_values", "image_grid_thw", "pixel_values_videos", "video_grid_thw"):
             full_key = f"{prefix}_{key}"
@@ -747,6 +756,8 @@ class OPSDTrainer(SFTTrainer):
         student_prompt_len = inputs["student_prompt_length"]
         sampled_token_ids = inputs["student_input_ids"][:, student_prompt_len:]
         shifted_labels = inputs["labels"][:, student_prompt_len:]
+        # Student forward should always run on the trajectory-producing branch.
+        # In visual OPSD this corresponds to the student-side (weaker) view.
         student_mm_kwargs = self._collect_multimodal_kwargs(inputs, "student")
 
         # === STUDENT FORWARD - Extract log-probs immediately ===
@@ -819,11 +830,17 @@ class OPSDTrainer(SFTTrainer):
                 teacher_bad_logits = outputs_teacher_bad.logits[
                     :, teacher_bad_prompt_len - 1 : -1, :
                 ]
+                # Contrastive teacher target:
+                # z_vcd = (1 + alpha) * z_good - alpha * z_bad
+                # Larger alpha increases suppression of spurious tokens preferred
+                # by the bad/weak view branch.
                 teacher_logits = (1.0 + self.vcd_alpha) * teacher_good_logits - self.vcd_alpha * teacher_bad_logits
 
                 del outputs_teacher_good, outputs_teacher_bad
                 del teacher_good_logits, teacher_bad_logits
             else:
+                # Baseline path (or privileged-visual-teacher path):
+                # single teacher branch with standard prompt tensors.
                 teacher_prompt_len = inputs["teacher_prompt_length"]
                 outputs_teacher = model(
                     input_ids=inputs["teacher_input_ids"],
@@ -888,7 +905,9 @@ class OPSDTrainer(SFTTrainer):
             )
             del student_logits_for_loss, teacher_logits_for_loss
 
-        # Strict visual OPSD objective: on-policy token-level distillation only.
+        # Final objective currently keeps only token-level distillation loss.
+        # This explicit alias keeps extension points clear if auxiliary losses
+        # (e.g., entropy regularization) are added later.
         loss = distill_loss
 
         mode = "train" if model.training else "eval"
@@ -967,6 +986,8 @@ class OPSDTrainer(SFTTrainer):
         print(f"  Max new tokens: {generation_config.max_new_tokens}")
         print(f"{'='*80}\n")
 
+        # Generation must condition on the same prompt modality tensors used to
+        # build `student_prompts`, so we collect `student_prompt_*` fields here.
         generation_mm_kwargs = self._collect_multimodal_kwargs(inputs, "student_prompt")
 
         # Generate output with respect to the student prompt only
@@ -992,6 +1013,11 @@ class OPSDTrainer(SFTTrainer):
         num_tokens = total_completion_tokens * num_prompts
         avg_completion_length = total_completion_tokens
         tokens_per_sec = num_tokens / elapsed_time if elapsed_time > 0 else 0
+        mode = "train" if model.training else "eval"
+        self._metrics[mode]["gen_tokens_per_sec"].append(float(tokens_per_sec))
+        self._metrics[mode]["gen_total_tokens"].append(float(num_tokens))
+        self._metrics[mode]["gen_avg_completion_len"].append(float(avg_completion_length))
+        self._metrics[mode]["gen_elapsed_sec"].append(float(elapsed_time))
         print(
             f"generation done - elapsed time: {elapsed_time:.2f}s, prompts: {num_prompts}, total tokens: {num_tokens}, avg length: {avg_completion_length}, speed: {tokens_per_sec:.1f} tok/s"
         )
@@ -1123,6 +1149,11 @@ class OPSDTrainer(SFTTrainer):
         num_prompts = len(completion_ids)
         avg_completion_length = total_completion_tokens / num_prompts if num_prompts > 0 else 0
         tokens_per_sec = total_completion_tokens / elapsed_time if elapsed_time > 0 else 0
+        mode = "train" if self.model.training else "eval"
+        self._metrics[mode]["gen_tokens_per_sec"].append(float(tokens_per_sec))
+        self._metrics[mode]["gen_total_tokens"].append(float(total_completion_tokens))
+        self._metrics[mode]["gen_avg_completion_len"].append(float(avg_completion_length))
+        self._metrics[mode]["gen_elapsed_sec"].append(float(elapsed_time))
         print(
             f"vLLM generation done - elapsed time: {elapsed_time:.2f}s, prompts: {num_prompts}, total tokens: {total_completion_tokens}, avg length: {avg_completion_length:.1f}, speed: {tokens_per_sec:.1f} tok/s"
         )
@@ -1546,6 +1577,9 @@ class OPSDTrainer(SFTTrainer):
         # Construct student full sequence: [student_prompt][generation]
         inputs["student_input_ids"] = generated_ids
         inputs["student_attention_mask"] = generated_attention_mask
+        # Copy prompt-level multimodal tensors to sequence-level keys so
+        # compute_loss can call model(...) on full [prompt + generation] inputs
+        # without needing prompt-specific branch logic.
         for key in ("pixel_values", "image_grid_thw", "pixel_values_videos", "video_grid_thw"):
             prompt_key = f"student_prompt_{key}"
             if prompt_key in inputs:
@@ -1556,6 +1590,9 @@ class OPSDTrainer(SFTTrainer):
             teacher_good_prompts = inputs["teacher_good_prompts"]
             teacher_bad_prompts = inputs["teacher_bad_prompts"]
 
+            # Reuse the exact same sampled completion for both teacher branches.
+            # This isolates the supervision difference to visual condition only
+            # (good vs bad view), not to different sampled trajectories.
             teacher_good_full_ids = torch.cat([teacher_good_prompts, generation_ids], dim=1)
             teacher_bad_full_ids = torch.cat([teacher_bad_prompts, generation_ids], dim=1)
 

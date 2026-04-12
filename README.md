@@ -193,3 +193,28 @@ bash scripts/run_opsd_vcd_skeleton.sh
 ---
 
 如果你继续扩展新的扰动类型（如 occlusion grid、JPEG、color jitter），建议仅在 `data_collator.py` 新增 perturb tag 映射，训练主干可保持不变。
+
+
+
+## 2024-4-12更新
+
+1. 训练启动脚本大幅增强（核心都在 run_opsd_vcd_debug_4gpu.sh）：  
+- 强制在 opsd conda 环境运行：run_opsd_vcd_debug_4gpu.sh  
+- 默认输出到数据盘路径 output，避免系统盘爆满：run_opsd_vcd_debug_4gpu.sh  
+- 默认 300 steps、每步日志、checkpoint 每 50 步、最多保留 3 个、只存模型：run_opsd_vcd_debug_4gpu.sh  
+- dataloader workers 和 pin_memory 参数已加：run_opsd_vcd_debug_4gpu.sh  
+- NCCL 修复：优先注入 compat libcuda 路径，避免 NCCL 初始化 SIGSEGV：run_opsd_vcd_debug_4gpu.sh  
+2. 训练指标增强（WandB 可见）：  
+- 新增生成吞吐和时延指标：gen_tokens_per_sec、gen_total_tokens、gen_avg_completion_len、gen_elapsed_sec  
+- 位置：opsd_trainer.py 和 opsd_trainer.py  
+3. 生成效率修复：  
+- collator padding 改为 left，去掉 decoder-only 的 right-padding 低效路径  
+- 位置：data_collator.py  
+4. 分布式稳定性防护（之前已加）：  
+- 分布式时自动关闭 gradient_checkpointing 以避开冲突：opsd_train.py  
+- 分布式下避免 device_map auto 路径冲突：opsd_train.py  
+5. 运维层面做过的处理：  
+- 清理过大 checkpoint 释放空间（避免 No space left on device）  
+- 多次重启验证后，已确认当前可在 opsd 环境下走 NCCL 路径启动。  
+
+如果你要，我可以下一步直接给你一条“安全清理命令”，只删旧 logs 和旧 wandb run，不动当前正在跑的最新 run。

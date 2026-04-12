@@ -96,10 +96,19 @@ class SelfDistillationDataCollator:
             "or reconsider if something doesn't work out:\n"
         )
 
-        # Set padding side explicitly for consistency
-        print(f"[DataCollator] Original padding_side: {self.tokenizer.padding_side}")
-        self.tokenizer.padding_side = "right"
-        print(f"[DataCollator] Set padding_side to: {self.tokenizer.padding_side}")
+        # Set padding side explicitly for consistency. For AutoProcessor-based
+        # multimodal runs, padding_side typically lives on the inner tokenizer.
+        padding_owner = self.tokenizer
+        if not hasattr(padding_owner, "padding_side") and hasattr(self.tokenizer, "tokenizer"):
+            padding_owner = self.tokenizer.tokenizer
+
+        if hasattr(padding_owner, "padding_side"):
+            print(f"[DataCollator] Original padding_side: {padding_owner.padding_side}")
+            # Decoder-only generation is more efficient and numerically safer with left padding.
+            padding_owner.padding_side = "left"
+            print(f"[DataCollator] Set padding_side to: {padding_owner.padding_side}")
+        else:
+            print("[DataCollator] padding_side not available on processor/tokenizer; keep backend default.")
         print(f"[DataCollator] Reason first mode: {self.reason_first}")
         print(f"[DataCollator] VCD-OPSD mode: {self.enable_vcd_opsd}")
         if self.enable_vcd_opsd:
@@ -121,6 +130,9 @@ class SelfDistillationDataCollator:
 
     @staticmethod
     def _parse_view_pairs(view_pairs):
+        # Normalize user-provided pair specs into a robust internal format.
+        # Supported examples: "clean-noise,mask-clean", "clean>noise", "clean:noise",
+        # or explicit iterable pairs like [("clean", "noise")].
         pairs = []
         if view_pairs is None:
             return pairs
@@ -167,6 +179,8 @@ class SelfDistillationDataCollator:
                 return self.view_pairs[example_idx % len(self.view_pairs)]
             return random.choice(self.view_pairs)
 
+        # For dataset-defined textual view columns, only keep pairs for which
+        # both sides exist in the current sample to avoid runtime KeyError.
         available_pairs = [pair for pair in self.view_pairs if self._pair_available(feature, pair)]
         if not available_pairs:
             return None
@@ -179,6 +193,10 @@ class SelfDistillationDataCollator:
 
     @staticmethod
     def _to_pil_image(image_obj):
+        if image_obj is None:
+            # Some datasets include samples with missing image content.
+            # Use a neutral placeholder so training can continue robustly.
+            return Image.new("RGB", (224, 224), color=(255, 255, 255))
         if isinstance(image_obj, Image.Image):
             return image_obj.convert("RGB")
         if isinstance(image_obj, np.ndarray):
@@ -188,6 +206,8 @@ class SelfDistillationDataCollator:
         raise TypeError(f"Unsupported image type: {type(image_obj)}")
 
     def _apply_perturbation(self, image_obj, view_tag):
+        # Convert view tags into deterministic transform families so the same
+        # training code can switch between text-view pairs and image-view pairs.
         image = self._to_pil_image(image_obj)
         tag = str(view_tag).strip().lower()
 
@@ -227,6 +247,8 @@ class SelfDistillationDataCollator:
         return multimodal
 
     def _tokenize_with_optional_images(self, prompts, max_prompt_len, images=None):
+        # Centralize tokenizer/processor invocation so text-only and multimodal
+        # branches share exactly the same padding/truncation contract.
         kwargs = {
             "padding": "max_length",
             "truncation": True,
@@ -236,14 +258,23 @@ class SelfDistillationDataCollator:
         if images is not None:
             encoded = self.tokenizer(text=prompts, images=images, **kwargs)
         else:
-            encoded = self.tokenizer(prompts, **kwargs)
+            encoded = self._tokenize_text_only(prompts, **kwargs)
         return encoded
+
+    def _tokenize_text_only(self, prompts, **kwargs):
+        # For processor-based multimodal tokenizers, pass text as a named
+        # argument; positional input may be interpreted as images.
+        if hasattr(self.tokenizer, "image_processor") or hasattr(self.tokenizer, "feature_extractor"):
+            return self.tokenizer(text=prompts, **kwargs)
+        return self.tokenizer(prompts, **kwargs)
 
     def __call__(self, features):
 
         batch_size = len(features)
 
-        # Prepare student and teacher prompts using chat template (matching evaluation)
+        # Build all prompt variants first, then tokenize in batch. This keeps
+        # chat templating consistent with evaluation and avoids per-example
+        # tokenizer calls later in the trainer step.
         student_prompts = []
         teacher_prompts = []
         teacher_reasoning_prompts = []  # NEW: for reason_first mode
@@ -286,7 +317,8 @@ class SelfDistillationDataCollator:
                         teacher_img = self._apply_perturbation(raw_image, teacher_view_tag)
                         student_img = self._apply_perturbation(raw_image, student_view_tag)
 
-                        # Keep text condition shared by default in image-perturbation mode.
+                        # In perturbation mode, we isolate the variable to image quality.
+                        # Textual condition remains identical by default.
                         problem_good_view = problem
                         problem_bad_view = problem
 
@@ -467,34 +499,40 @@ class SelfDistillationDataCollator:
                     )
                     teacher_prompts.append(teacher_prompt)
 
-        # Tokenize WITHOUT padding first to get true lengths
+        # First pass (no padding): obtain true prompt lengths per sample.
+        # We need these lengths for precise label masking later.
         has_student_images = len(student_images) == len(student_prompts) and len(student_images) > 0
         if has_student_images:
-            student_encoded_no_pad = self.tokenizer(
-                text=student_prompts,
+            # Some multimodal processors are fragile when called with
+            # `padding=False` in batched text+image mode. Use the stable padded
+            # path and derive per-sample lengths from the attention mask.
+            max_student_prompt_len = self.max_length
+            student_encoded = self._tokenize_with_optional_images(
+                student_prompts,
+                max_student_prompt_len,
                 images=student_images,
-                padding=False,
-                truncation=True,
-                max_length=self.max_length,
+            )
+            student_prompt_lengths = (
+                student_encoded["attention_mask"].sum(dim=1).tolist()
             )
         else:
-            student_encoded_no_pad = self.tokenizer(
+            student_encoded_no_pad = self._tokenize_text_only(
                 student_prompts,
                 padding=False,
                 truncation=True,
                 max_length=self.max_length,
             )
-        student_prompt_lengths = [len(ids) for ids in student_encoded_no_pad["input_ids"]]
+            student_prompt_lengths = [len(ids) for ids in student_encoded_no_pad["input_ids"]]
 
-        # Find max lengths in this batch
-        max_student_prompt_len = max(student_prompt_lengths)
+            # Dynamic per-batch max length keeps padding minimal and improves throughput.
+            max_student_prompt_len = max(student_prompt_lengths)
 
-        # Tokenize WITH padding to max length in batch
-        student_encoded = self._tokenize_with_optional_images(
-            student_prompts,
-            max_student_prompt_len,
-            images=student_images if has_student_images else None,
-        )
+            # Second pass (with padding): create fixed-shape tensors for batching.
+            student_encoded = self._tokenize_with_optional_images(
+                student_prompts,
+                max_student_prompt_len,
+                images=None,
+            )
 
         result = {
             "student_prompts": student_encoded["input_ids"],
@@ -508,7 +546,7 @@ class SelfDistillationDataCollator:
 
         if self.reason_first:
             # Tokenize reasoning prompts
-            reasoning_encoded_no_pad = self.tokenizer(
+            reasoning_encoded_no_pad = self._tokenize_text_only(
                 teacher_reasoning_prompts,
                 padding=False,
                 truncation=True,
@@ -517,7 +555,7 @@ class SelfDistillationDataCollator:
             reasoning_prompt_lengths = [len(ids) for ids in reasoning_encoded_no_pad["input_ids"]]
             max_reasoning_prompt_len = max(reasoning_prompt_lengths)
 
-            reasoning_encoded = self.tokenizer(
+            reasoning_encoded = self._tokenize_text_only(
                 teacher_reasoning_prompts,
                 padding="max_length",
                 truncation=True,
@@ -528,7 +566,7 @@ class SelfDistillationDataCollator:
             # Tokenize transition prompt (this will be appended after reasoning)
             # Don't use chat template here - just the raw text
             transition_text = f"\n{self.transition_prompt}\nPlease reason step by step, and put your final answer within \\boxed{{}}."
-            transition_encoded = self.tokenizer(
+            transition_encoded = self._tokenize_text_only(
                 [transition_text] * batch_size,
                 padding=False,
                 truncation=False,
@@ -554,7 +592,7 @@ class SelfDistillationDataCollator:
                         max_length=self.max_length,
                     )
                 else:
-                    teacher_good_encoded_no_pad = self.tokenizer(
+                    teacher_good_encoded_no_pad = self._tokenize_text_only(
                         teacher_good_prompts,
                         padding=False,
                         truncation=True,
@@ -580,7 +618,7 @@ class SelfDistillationDataCollator:
                         max_length=self.max_length,
                     )
                 else:
-                    teacher_bad_encoded_no_pad = self.tokenizer(
+                    teacher_bad_encoded_no_pad = self._tokenize_text_only(
                         teacher_bad_prompts,
                         padding=False,
                         truncation=True,
@@ -597,7 +635,8 @@ class SelfDistillationDataCollator:
                     images=teacher_bad_images if self.use_image_perturbation_pairs else None,
                 )
 
-                # Keep teacher_prompts aliases for backward compatibility in downstream logging.
+                # Preserve baseline key names (`teacher_prompts`, `teacher_prompt_*`) so
+                # existing logging/debug code keeps working without refactor.
                 result.update(
                     {
                         "teacher_prompts": teacher_good_encoded["input_ids"],
@@ -637,7 +676,7 @@ class SelfDistillationDataCollator:
                         max_length=self.max_length,
                     )
                 else:
-                    teacher_encoded_no_pad = self.tokenizer(
+                    teacher_encoded_no_pad = self._tokenize_text_only(
                         teacher_prompts,
                         padding=False,
                         truncation=True,
