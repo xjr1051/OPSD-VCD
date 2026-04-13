@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+[#!/usr/bin/env bash
 set -euo pipefail
 
 # Multi-GPU low-VRAM debug launcher for visual OPSD + VCD.
@@ -39,6 +39,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NUM_PROCESSES="${NUM_PROCESSES:-4}"
 PER_DEVICE_BS="${PER_DEVICE_BS:-2}"
 GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS:-1}"
+NUM_TRAIN_EPOCHS="${NUM_TRAIN_EPOCHS:-1}"
 MAX_STEPS="${MAX_STEPS:-300}"
 MAX_LENGTH="${MAX_LENGTH:-2048}"
 MAX_COMPLETION_LENGTH="${MAX_COMPLETION_LENGTH:-128}"
@@ -52,22 +53,29 @@ REPORT_TO="${REPORT_TO:-wandb}"
 USE_FIXED_TEACHER="${USE_FIXED_TEACHER:-1}"
 USE_VCD_OPSD="${USE_VCD_OPSD:-1}"
 USE_IMAGE_PERTURBATION_PAIRS="${USE_IMAGE_PERTURBATION_PAIRS:-1}"
-USE_PRIVILEGED_VISUAL_TEACHER="${USE_PRIVILEGED_VISUAL_TEACHER:-1}"
+USE_PRIVILEGED_VISUAL_TEACHER="${USE_PRIVILEGED_VISUAL_TEACHER:-0}"
+USE_SINGLE_VISUAL_TEACHER="${USE_SINGLE_VISUAL_TEACHER:-1}"
+VCD_ALPHA="${VCD_ALPHA:-0.5}"
+PERTURBATION_MODE="${PERTURBATION_MODE:-clean-noise}"
+VIEW_PAIRS="${VIEW_PAIRS:-clean-noise}"
+PAIR_SAMPLING_STRATEGY="${PAIR_SAMPLING_STRATEGY:-first}"
+NOISE_STD="${NOISE_STD:-15.0}"
+MASK_RATIO="${MASK_RATIO:-0.15}"
+BLUR_RADIUS="${BLUR_RADIUS:-1.5}"
 ATTN_IMPLEMENTATION="${ATTN_IMPLEMENTATION:-sdpa}"
 TORCH_DTYPE="${TORCH_DTYPE:-float16}"
 ENABLE_GRADIENT_CHECKPOINTING="${ENABLE_GRADIENT_CHECKPOINTING:-1}"
 USE_PEFT="${USE_PEFT:-1}"
 DDP_BACKEND="${DDP_BACKEND:-nccl}"
 DDP_FIND_UNUSED_PARAMETERS="${DDP_FIND_UNUSED_PARAMETERS:-}"
-AUTO_FALLBACK_NCCL_TO_GLOO="${AUTO_FALLBACK_NCCL_TO_GLOO:-0}"
 NCCL_COMPAT_LIB_DIR="${NCCL_COMPAT_LIB_DIR:-/usr/local/cuda-12.8/compat}"
 PREFER_CUDA_COMPAT_LIBCUDA="${PREFER_CUDA_COMPAT_LIBCUDA:-1}"
 SAVE_STRATEGY="${SAVE_STRATEGY:-steps}"
-SAVE_STEPS="${SAVE_STEPS:-50}"
+SAVE_STEPS="${SAVE_STEPS:-100}"
 SAVE_TOTAL_LIMIT="${SAVE_TOTAL_LIMIT:-3}"
 SAVE_ONLY_MODEL="${SAVE_ONLY_MODEL:-true}"
 LOGGING_STRATEGY="${LOGGING_STRATEGY:-steps}"
-LOGGING_STEPS="${LOGGING_STEPS:-1}"
+LOGGING_STEPS="${LOGGING_STEPS:-5}"
 LOGGING_FIRST_STEP="${LOGGING_FIRST_STEP:-true}"
 INCLUDE_TOKENS_PER_SECOND="${INCLUDE_TOKENS_PER_SECOND:-true}"
 DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-8}"
@@ -79,6 +87,31 @@ SOLUTION_FIELD="${SOLUTION_FIELD:-lecture}"
 IMAGE_FIELD="${IMAGE_FIELD:-image}"
 PRIVILEGED_VISUAL_FIELD="${PRIVILEGED_VISUAL_FIELD:-hint}"
 IMAGE_TOKEN="${IMAGE_TOKEN:-<|image_pad|>}"
+
+# In online perturbation mode, force one fixed perturbation pair per run.
+# Special rule requested by current experiments:
+# - clean-noise => teacher=clean, student=noise
+# - clean-mask  => teacher=mask,  student=clean
+if [[ "${USE_IMAGE_PERTURBATION_PAIRS}" == "1" ]]; then
+  case "${PERTURBATION_MODE}" in
+    clean-noise)
+      VIEW_PAIRS="clean-noise"
+      ;;
+    clean-mask)
+      VIEW_PAIRS="mask-clean"
+      ;;
+    clean-blur)
+      VIEW_PAIRS="clean-blur"
+      ;;
+    *)
+      echo "[error] Unsupported PERTURBATION_MODE=${PERTURBATION_MODE}. Use one of: clean-noise, clean-mask, clean-blur" >&2
+      exit 1
+      ;;
+  esac
+
+  # Keep sampling deterministic and fixed for this run.
+  PAIR_SAMPLING_STRATEGY="first"
+fi
 
 cmd=(
   accelerate launch
@@ -94,7 +127,7 @@ cmd=(
   --gradient_accumulation_steps "${GRAD_ACCUM_STEPS}"
   --output_dir "${OUTPUT_DIR}"
   --run_config "${RUN_CONFIG}"
-  --num_train_epochs 1
+  --num_train_epochs "${NUM_TRAIN_EPOCHS}"
   --max_steps "${MAX_STEPS}"
   --max_completion_length "${MAX_COMPLETION_LENGTH}"
   --logging_strategy "${LOGGING_STRATEGY}"
@@ -117,15 +150,15 @@ cmd=(
   --top_k 20
   --lmbda 1
   --jsd_token_clip 0.05
-  --vcd_alpha 0.5
-  --view_pairs clean-noise
+  --vcd_alpha "${VCD_ALPHA}"
+  --view_pairs "${VIEW_PAIRS}"
   --view_field_prefix problem_
-  --pair_sampling_strategy first
+  --pair_sampling_strategy "${PAIR_SAMPLING_STRATEGY}"
   --image_field "${IMAGE_FIELD}"
   --image_token "${IMAGE_TOKEN}"
-  --noise_std 15.0
-  --mask_ratio 0.15
-  --blur_radius 1.5
+  --noise_std "${NOISE_STD}"
+  --mask_ratio "${MASK_RATIO}"
+  --blur_radius "${BLUR_RADIUS}"
   --privileged_visual_field "${PRIVILEGED_VISUAL_FIELD}"
   --good_view_field problem_good_view
   --bad_view_field problem_bad_view
@@ -142,6 +175,11 @@ if [[ -n "${DATASET_CONFIG_NAME}" ]]; then
 fi
 
 if [[ -n "${DDP_BACKEND}" ]]; then
+  if [[ "${DDP_BACKEND}" != "nccl" ]]; then
+    echo "[error] DDP_BACKEND must be 'nccl'. Current value: ${DDP_BACKEND}" >&2
+    exit 1
+  fi
+
   if [[ "${DDP_BACKEND}" == "nccl" && "${PREFER_CUDA_COMPAT_LIBCUDA}" == "1" ]]; then
     if [[ -f "${NCCL_COMPAT_LIB_DIR}/libcuda.so.1" ]]; then
       export LD_LIBRARY_PATH="${NCCL_COMPAT_LIB_DIR}:${LD_LIBRARY_PATH:-}"
@@ -149,11 +187,6 @@ if [[ -n "${DDP_BACKEND}" ]]; then
     else
       echo "[warn] NCCL compat libcuda path missing: ${NCCL_COMPAT_LIB_DIR}" >&2
     fi
-  fi
-  if [[ "${DDP_BACKEND}" == "nccl" && "${AUTO_FALLBACK_NCCL_TO_GLOO}" == "1" ]]; then
-    echo "[warn] DDP_BACKEND=nccl is unstable in this environment (NCCL init SIGSEGV observed)."
-    echo "[warn] Auto-fallback to DDP_BACKEND=gloo. Set AUTO_FALLBACK_NCCL_TO_GLOO=0 to force NCCL."
-    DDP_BACKEND="gloo"
   fi
   cmd+=(--ddp_backend "${DDP_BACKEND}")
 fi
@@ -191,11 +224,22 @@ if [[ "${USE_PRIVILEGED_VISUAL_TEACHER}" == "1" ]]; then
   cmd+=(--use_privileged_visual_teacher)
 fi
 
+if [[ "${USE_SINGLE_VISUAL_TEACHER}" == "1" ]]; then
+  cmd+=(--use_single_visual_teacher)
+fi
+
 echo "[run] MODEL_NAME_OR_PATH=${MODEL_NAME_OR_PATH}"
 echo "[run] DATASET_NAME=${DATASET_NAME}"
 echo "[run] TRAIN_SPLIT=${TRAIN_SPLIT}"
 echo "[run] CONDA_ENV=${CONDA_DEFAULT_ENV:-unknown}"
 echo "[run] OUTPUT_DIR=${OUTPUT_DIR}"
 echo "[run] NUM_PROCESSES=${NUM_PROCESSES}, PER_DEVICE_BS=${PER_DEVICE_BS}, GRAD_ACCUM_STEPS=${GRAD_ACCUM_STEPS}"
+echo "[run] NUM_TRAIN_EPOCHS=${NUM_TRAIN_EPOCHS}, MAX_STEPS=${MAX_STEPS}"
+echo "[run] visual_opsd: USE_VCD_OPSD=${USE_VCD_OPSD}, USE_IMAGE_PERTURBATION_PAIRS=${USE_IMAGE_PERTURBATION_PAIRS}, USE_PRIVILEGED_VISUAL_TEACHER=${USE_PRIVILEGED_VISUAL_TEACHER}"
+echo "[run] single_teacher: USE_SINGLE_VISUAL_TEACHER=${USE_SINGLE_VISUAL_TEACHER}"
+echo "[run] perturbation_mode: PERTURBATION_MODE=${PERTURBATION_MODE}"
+echo "[run] visual_pair: VIEW_PAIRS=${VIEW_PAIRS}, PAIR_SAMPLING_STRATEGY=${PAIR_SAMPLING_STRATEGY}, VCD_ALPHA=${VCD_ALPHA}"
+echo "[run] perturb_strength: NOISE_STD=${NOISE_STD}, MASK_RATIO=${MASK_RATIO}, BLUR_RADIUS=${BLUR_RADIUS}"
 
 "${cmd[@]}"
+]

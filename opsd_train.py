@@ -212,6 +212,12 @@ class CustomScriptArguments(ScriptArguments):
             "help": "Enable privileged visual teacher p_T(.|x,v,z*): teacher prompt includes privileged visual evidence field."
         },
     )
+    use_single_visual_teacher: bool = field(
+        default=False,
+        metadata={
+            "help": "Use pure visual single-teacher mode in VCD-OPSD: teacher uses only the good/factual view branch, student uses the weak view branch."
+        },
+    )
     privileged_visual_field: str = field(
         default="privileged_visual_evidence",
         metadata={
@@ -297,6 +303,14 @@ if __name__ == "__main__":
             "use_image_perturbation_pairs=True requires use_multimodal_processor=True."
         )
 
+    if script_args.use_single_visual_teacher and not script_args.use_vcd_opsd:
+        raise ValueError("use_single_visual_teacher=True requires use_vcd_opsd=True.")
+
+    if script_args.use_single_visual_teacher and script_args.use_privileged_visual_teacher:
+        raise ValueError(
+            "use_single_visual_teacher=True and use_privileged_visual_teacher=True are mutually exclusive."
+        )
+
     # Only initialize wandb on main process (LOCAL_RANK 0 or not set)
     if os.environ.get("LOCAL_RANK", "0") == "0":
         wandb.init(
@@ -345,6 +359,7 @@ if __name__ == "__main__":
                 "blur_radius": script_args.blur_radius if script_args.use_image_perturbation_pairs else None,
                 "use_multimodal_processor": script_args.use_multimodal_processor,
                 "use_privileged_visual_teacher": script_args.use_privileged_visual_teacher,
+                "use_single_visual_teacher": script_args.use_single_visual_teacher,
                 "privileged_visual_field": script_args.privileged_visual_field if script_args.use_privileged_visual_teacher else None,
             },
         )
@@ -503,6 +518,7 @@ if __name__ == "__main__":
         mask_ratio=script_args.mask_ratio,
         blur_radius=script_args.blur_radius,
         use_privileged_visual_teacher=script_args.use_privileged_visual_teacher,
+        use_single_visual_teacher=script_args.use_single_visual_teacher,
         privileged_visual_field=script_args.privileged_visual_field,
     )
     print("[stage] OPSDTrainer initialized")

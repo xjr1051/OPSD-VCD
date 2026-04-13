@@ -39,6 +39,7 @@ class SelfDistillationDataCollator:
         mask_ratio=0.25,
         blur_radius=2.0,
         use_privileged_visual_teacher=False,
+        use_single_visual_teacher=False,
         privileged_visual_field="privileged_visual_evidence",
     ):
         self.tokenizer = tokenizer
@@ -59,6 +60,7 @@ class SelfDistillationDataCollator:
         self.mask_ratio = mask_ratio
         self.blur_radius = blur_radius
         self.use_privileged_visual_teacher = use_privileged_visual_teacher
+        self.use_single_visual_teacher = use_single_visual_teacher
         self.privileged_visual_field = privileged_visual_field
 
         self.pad_token_id = getattr(self.tokenizer, "pad_token_id", None)
@@ -75,9 +77,26 @@ class SelfDistillationDataCollator:
                 "but a text-only tokenizer was provided."
             )
 
+        if self.use_image_perturbation_pairs:
+            # Keep one fixed perturbation pair per run.
+            self.view_pairs = [self._normalize_perturbation_pair(pair) for pair in self.view_pairs]
+            if len(self.view_pairs) != 1:
+                raise ValueError(
+                    "use_image_perturbation_pairs=True now requires exactly one view pair "
+                    "(for example: clean-noise or clean-mask)."
+                )
+
         if self.reason_first and self.enable_vcd_opsd:
             raise ValueError(
                 "reason_first and enable_vcd_opsd cannot be enabled together in this baseline skeleton."
+            )
+
+        if self.use_single_visual_teacher and not self.enable_vcd_opsd:
+            raise ValueError("use_single_visual_teacher=True requires enable_vcd_opsd=True.")
+
+        if self.use_single_visual_teacher and self.use_privileged_visual_teacher:
+            raise ValueError(
+                "use_single_visual_teacher=True and use_privileged_visual_teacher=True are mutually exclusive."
             )
 
         # Prompt for reasoning about the solution before teaching
@@ -118,6 +137,7 @@ class SelfDistillationDataCollator:
             print(f"[DataCollator] View pair config: {self.view_pairs}")
             print(f"[DataCollator] View field prefix: {self.view_field_prefix}")
             print(f"[DataCollator] Pair sampling strategy: {self.pair_sampling_strategy}")
+            print(f"[DataCollator] Single visual teacher: {self.use_single_visual_teacher}")
         print(f"[DataCollator] Privileged visual teacher: {self.use_privileged_visual_teacher}")
         if self.use_privileged_visual_teacher:
             print(f"[DataCollator] Privileged field: {self.privileged_visual_field}")
@@ -156,6 +176,16 @@ class SelfDistillationDataCollator:
                 pairs.append((teacher_tag, student_tag))
 
         return pairs
+
+    @staticmethod
+    def _normalize_perturbation_pair(pair):
+        teacher_tag, student_tag = pair
+        # Experiment convention:
+        # - clean-noise => teacher=clean, student=noise
+        # - clean-mask  => teacher=mask,  student=clean
+        if teacher_tag == "clean" and student_tag == "mask":
+            return ("mask", "clean")
+        return pair
 
     def _build_view_field_name(self, view_tag):
         return f"{self.view_field_prefix}{view_tag}"
@@ -323,7 +353,8 @@ class SelfDistillationDataCollator:
                         problem_bad_view = problem
 
                         teacher_good_images.append(teacher_img)
-                        teacher_bad_images.append(student_img)
+                        if not self.use_single_visual_teacher:
+                            teacher_bad_images.append(student_img)
                         student_images.append(student_img)
                         teacher_images.append(teacher_img)
                     else:
@@ -396,13 +427,14 @@ class SelfDistillationDataCollator:
                             f"{self.transition_prompt}\n"
                             f"Please reason step by step, and put your final answer within \\boxed{{}}."
                         )
-                        teacher_bad_user_message = (
-                            f"{self.image_token}\nProblem: {problem_bad_view}\n\n"
-                            f"Here is a reference solution to this problem:\n"
-                            f"=== Reference Solution Begin ===\n{solution}\n=== Reference Solution End ===\n"
-                            f"{self.transition_prompt}\n"
-                            f"Please reason step by step, and put your final answer within \\boxed{{}}."
-                        )
+                        if not self.use_single_visual_teacher:
+                            teacher_bad_user_message = (
+                                f"{self.image_token}\nProblem: {problem_bad_view}\n\n"
+                                f"Here is a reference solution to this problem:\n"
+                                f"=== Reference Solution Begin ===\n{solution}\n=== Reference Solution End ===\n"
+                                f"{self.transition_prompt}\n"
+                                f"Please reason step by step, and put your final answer within \\boxed{{}}."
+                            )
                     else:
                         if has_image_input:
                             teacher_good_user_message = (
@@ -412,13 +444,14 @@ class SelfDistillationDataCollator:
                                 f"{self.transition_prompt}\n"
                                 f"Please reason step by step, and put your final answer within \\boxed{{}}."
                             )
-                            teacher_bad_user_message = (
-                                f"{self.image_token}\nProblem: {problem_bad_view}\n\n"
-                                f"Here is a reference solution to this problem:\n"
-                                f"=== Reference Solution Begin ===\n{solution}\n=== Reference Solution End ===\n"
-                                f"{self.transition_prompt}\n"
-                                f"Please reason step by step, and put your final answer within \\boxed{{}}."
-                            )
+                            if not self.use_single_visual_teacher:
+                                teacher_bad_user_message = (
+                                    f"{self.image_token}\nProblem: {problem_bad_view}\n\n"
+                                    f"Here is a reference solution to this problem:\n"
+                                    f"=== Reference Solution Begin ===\n{solution}\n=== Reference Solution End ===\n"
+                                    f"{self.transition_prompt}\n"
+                                    f"Please reason step by step, and put your final answer within \\boxed{{}}."
+                                )
                         else:
                             teacher_good_user_message = (
                                 f"Problem: {problem_good_view}\n\n"
@@ -427,15 +460,15 @@ class SelfDistillationDataCollator:
                                 f"{self.transition_prompt}\n"
                                 f"Please reason step by step, and put your final answer within \\boxed{{}}."
                             )
-                            teacher_bad_user_message = (
-                                f"Problem: {problem_bad_view}\n\n"
-                                f"Here is a reference solution to this problem:\n"
-                                f"=== Reference Solution Begin ===\n{solution}\n=== Reference Solution End ===\n"
-                                f"{self.transition_prompt}\n"
-                                f"Please reason step by step, and put your final answer within \\boxed{{}}."
-                            )
+                            if not self.use_single_visual_teacher:
+                                teacher_bad_user_message = (
+                                    f"Problem: {problem_bad_view}\n\n"
+                                    f"Here is a reference solution to this problem:\n"
+                                    f"=== Reference Solution Begin ===\n{solution}\n=== Reference Solution End ===\n"
+                                    f"{self.transition_prompt}\n"
+                                    f"Please reason step by step, and put your final answer within \\boxed{{}}."
+                                )
                     teacher_good_messages = [{"role": "user", "content": teacher_good_user_message}]
-                    teacher_bad_messages = [{"role": "user", "content": teacher_bad_user_message}]
 
                     teacher_good_prompt = self.tokenizer.apply_chat_template(
                         teacher_good_messages,
@@ -443,14 +476,18 @@ class SelfDistillationDataCollator:
                         add_generation_prompt=True,
                         enable_thinking=True,
                     )
-                    teacher_bad_prompt = self.tokenizer.apply_chat_template(
-                        teacher_bad_messages,
-                        tokenize=False,
-                        add_generation_prompt=True,
-                        enable_thinking=True,
-                    )
                     teacher_good_prompts.append(teacher_good_prompt)
-                    teacher_bad_prompts.append(teacher_bad_prompt)
+                    if self.use_single_visual_teacher:
+                        teacher_prompts.append(teacher_good_prompt)
+                    else:
+                        teacher_bad_messages = [{"role": "user", "content": teacher_bad_user_message}]
+                        teacher_bad_prompt = self.tokenizer.apply_chat_template(
+                            teacher_bad_messages,
+                            tokenize=False,
+                            add_generation_prompt=True,
+                            enable_thinking=True,
+                        )
+                        teacher_bad_prompts.append(teacher_bad_prompt)
                 else:
                     if self.use_privileged_visual_teacher:
                         if self.use_image_perturbation_pairs or has_image_input:
@@ -583,87 +620,125 @@ class SelfDistillationDataCollator:
             )
         else:
             if self.enable_vcd_opsd and not self.use_privileged_visual_teacher:
-                if self.use_image_perturbation_pairs:
-                    teacher_good_encoded_no_pad = self.tokenizer(
-                        text=teacher_good_prompts,
-                        images=teacher_good_images,
-                        padding=False,
-                        truncation=True,
-                        max_length=self.max_length,
+                if self.use_single_visual_teacher:
+                    has_teacher_images = len(teacher_images) == len(teacher_prompts) and len(teacher_images) > 0
+                    if has_teacher_images:
+                        teacher_encoded_no_pad = self.tokenizer(
+                            text=teacher_prompts,
+                            images=teacher_images,
+                            padding=False,
+                            truncation=True,
+                            max_length=self.max_length,
+                        )
+                    else:
+                        teacher_encoded_no_pad = self._tokenize_text_only(
+                            teacher_prompts,
+                            padding=False,
+                            truncation=True,
+                            max_length=self.max_length,
+                        )
+
+                    teacher_prompt_lengths = [len(ids) for ids in teacher_encoded_no_pad["input_ids"]]
+                    max_teacher_prompt_len = max(teacher_prompt_lengths)
+
+                    teacher_encoded = self._tokenize_with_optional_images(
+                        teacher_prompts,
+                        max_teacher_prompt_len,
+                        images=teacher_images if has_teacher_images else None,
                     )
+
+                    result.update(
+                        {
+                            "teacher_prompts": teacher_encoded["input_ids"],
+                            "teacher_prompt_attention_mask": teacher_encoded["attention_mask"],
+                            "teacher_prompt_length": max_teacher_prompt_len,
+                            "teacher_prompt_lengths_per_example": torch.tensor(teacher_prompt_lengths),
+                        }
+                    )
+                    for key, value in self._extract_multimodal_fields(teacher_encoded).items():
+                        result[f"teacher_prompt_{key}"] = value
                 else:
-                    teacher_good_encoded_no_pad = self._tokenize_text_only(
+                    if self.use_image_perturbation_pairs:
+                        teacher_good_encoded_no_pad = self.tokenizer(
+                            text=teacher_good_prompts,
+                            images=teacher_good_images,
+                            padding=False,
+                            truncation=True,
+                            max_length=self.max_length,
+                        )
+                    else:
+                        teacher_good_encoded_no_pad = self._tokenize_text_only(
+                            teacher_good_prompts,
+                            padding=False,
+                            truncation=True,
+                            max_length=self.max_length,
+                        )
+                    teacher_good_prompt_lengths = [
+                        len(ids) for ids in teacher_good_encoded_no_pad["input_ids"]
+                    ]
+                    max_teacher_good_prompt_len = max(teacher_good_prompt_lengths)
+
+                    teacher_good_encoded = self._tokenize_with_optional_images(
                         teacher_good_prompts,
-                        padding=False,
-                        truncation=True,
-                        max_length=self.max_length,
+                        max_teacher_good_prompt_len,
+                        images=teacher_good_images if self.use_image_perturbation_pairs else None,
                     )
-                teacher_good_prompt_lengths = [
-                    len(ids) for ids in teacher_good_encoded_no_pad["input_ids"]
-                ]
-                max_teacher_good_prompt_len = max(teacher_good_prompt_lengths)
 
-                teacher_good_encoded = self._tokenize_with_optional_images(
-                    teacher_good_prompts,
-                    max_teacher_good_prompt_len,
-                    images=teacher_good_images if self.use_image_perturbation_pairs else None,
-                )
+                    if self.use_image_perturbation_pairs:
+                        teacher_bad_encoded_no_pad = self.tokenizer(
+                            text=teacher_bad_prompts,
+                            images=teacher_bad_images,
+                            padding=False,
+                            truncation=True,
+                            max_length=self.max_length,
+                        )
+                    else:
+                        teacher_bad_encoded_no_pad = self._tokenize_text_only(
+                            teacher_bad_prompts,
+                            padding=False,
+                            truncation=True,
+                            max_length=self.max_length,
+                        )
+                    teacher_bad_prompt_lengths = [
+                        len(ids) for ids in teacher_bad_encoded_no_pad["input_ids"]
+                    ]
+                    max_teacher_bad_prompt_len = max(teacher_bad_prompt_lengths)
 
-                if self.use_image_perturbation_pairs:
-                    teacher_bad_encoded_no_pad = self.tokenizer(
-                        text=teacher_bad_prompts,
-                        images=teacher_bad_images,
-                        padding=False,
-                        truncation=True,
-                        max_length=self.max_length,
-                    )
-                else:
-                    teacher_bad_encoded_no_pad = self._tokenize_text_only(
+                    teacher_bad_encoded = self._tokenize_with_optional_images(
                         teacher_bad_prompts,
-                        padding=False,
-                        truncation=True,
-                        max_length=self.max_length,
+                        max_teacher_bad_prompt_len,
+                        images=teacher_bad_images if self.use_image_perturbation_pairs else None,
                     )
-                teacher_bad_prompt_lengths = [
-                    len(ids) for ids in teacher_bad_encoded_no_pad["input_ids"]
-                ]
-                max_teacher_bad_prompt_len = max(teacher_bad_prompt_lengths)
 
-                teacher_bad_encoded = self._tokenize_with_optional_images(
-                    teacher_bad_prompts,
-                    max_teacher_bad_prompt_len,
-                    images=teacher_bad_images if self.use_image_perturbation_pairs else None,
-                )
-
-                # Preserve baseline key names (`teacher_prompts`, `teacher_prompt_*`) so
-                # existing logging/debug code keeps working without refactor.
-                result.update(
-                    {
-                        "teacher_prompts": teacher_good_encoded["input_ids"],
-                        "teacher_prompt_attention_mask": teacher_good_encoded["attention_mask"],
-                        "teacher_prompt_length": max_teacher_good_prompt_len,
-                        "teacher_prompt_lengths_per_example": torch.tensor(
-                            teacher_good_prompt_lengths
-                        ),
-                        "teacher_good_prompts": teacher_good_encoded["input_ids"],
-                        "teacher_good_prompt_attention_mask": teacher_good_encoded["attention_mask"],
-                        "teacher_good_prompt_length": max_teacher_good_prompt_len,
-                        "teacher_good_prompt_lengths_per_example": torch.tensor(
-                            teacher_good_prompt_lengths
-                        ),
-                        "teacher_bad_prompts": teacher_bad_encoded["input_ids"],
-                        "teacher_bad_prompt_attention_mask": teacher_bad_encoded["attention_mask"],
-                        "teacher_bad_prompt_length": max_teacher_bad_prompt_len,
-                        "teacher_bad_prompt_lengths_per_example": torch.tensor(
-                            teacher_bad_prompt_lengths
-                        ),
-                    }
-                )
-                for key, value in self._extract_multimodal_fields(teacher_good_encoded).items():
-                    result[f"teacher_prompt_{key}"] = value
-                    result[f"teacher_good_prompt_{key}"] = value
-                for key, value in self._extract_multimodal_fields(teacher_bad_encoded).items():
-                    result[f"teacher_bad_prompt_{key}"] = value
+                    # Preserve baseline key names (`teacher_prompts`, `teacher_prompt_*`) so
+                    # existing logging/debug code keeps working without refactor.
+                    result.update(
+                        {
+                            "teacher_prompts": teacher_good_encoded["input_ids"],
+                            "teacher_prompt_attention_mask": teacher_good_encoded["attention_mask"],
+                            "teacher_prompt_length": max_teacher_good_prompt_len,
+                            "teacher_prompt_lengths_per_example": torch.tensor(
+                                teacher_good_prompt_lengths
+                            ),
+                            "teacher_good_prompts": teacher_good_encoded["input_ids"],
+                            "teacher_good_prompt_attention_mask": teacher_good_encoded["attention_mask"],
+                            "teacher_good_prompt_length": max_teacher_good_prompt_len,
+                            "teacher_good_prompt_lengths_per_example": torch.tensor(
+                                teacher_good_prompt_lengths
+                            ),
+                            "teacher_bad_prompts": teacher_bad_encoded["input_ids"],
+                            "teacher_bad_prompt_attention_mask": teacher_bad_encoded["attention_mask"],
+                            "teacher_bad_prompt_length": max_teacher_bad_prompt_len,
+                            "teacher_bad_prompt_lengths_per_example": torch.tensor(
+                                teacher_bad_prompt_lengths
+                            ),
+                        }
+                    )
+                    for key, value in self._extract_multimodal_fields(teacher_good_encoded).items():
+                        result[f"teacher_prompt_{key}"] = value
+                        result[f"teacher_good_prompt_{key}"] = value
+                    for key, value in self._extract_multimodal_fields(teacher_bad_encoded).items():
+                        result[f"teacher_bad_prompt_{key}"] = value
             else:
                 # Normal mode: tokenize teacher prompts
                 has_teacher_images = len(teacher_images) == len(teacher_prompts) and len(teacher_images) > 0

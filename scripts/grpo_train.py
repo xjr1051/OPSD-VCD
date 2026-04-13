@@ -57,12 +57,14 @@ def extract_boxed_answer(text):
     think_end = text.rfind("</think>")
     search_text = text[think_end + len("</think>") :] if think_end != -1 else text
 
+    # Locate the first boxed expression in the selected region.
     idx = search_text.find(r"\boxed{")
     if idx == -1:
         return None
     start = idx + len(r"\boxed{")
     depth = 1
     i = start
+    # Brace-depth scan handles nested constructs like \boxed{\frac{1}{2}}.
     while i < len(search_text) and depth > 0:
         if search_text[i] == "{":
             depth += 1
@@ -103,6 +105,8 @@ def reward_correctness(completions, Answer, **kwargs):
                 pass
 
         # Fallback: whitespace-stripped string match (handles MCQ like "E", "A", etc.)
+        # If symbolic verification fails (or is inapplicable), use a strict
+        # normalized string fallback so multiple-choice style targets still work.
         if reward == 0.0:
             pred_norm = re.sub(r"\s+", "", pred_answer or "").lower()
             gt_norm = re.sub(r"\s+", "", ground_truth or "").lower()
@@ -150,7 +154,8 @@ if __name__ == "__main__":
         training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps * num_processes
     )
 
-    # Use custom run_config if provided, otherwise generate automatic name
+    # Use custom run_config if provided, otherwise generate automatic name.
+    # The generated name encodes key knobs for easier run filtering/comparison.
     if script_args.run_config:
         full_wandb_run_name = f"{script_args.run_config}_lr{lr_str}_bs{effective_batch_size}"
         # Append run_config to output_dir if it doesn't already end with it
@@ -186,7 +191,7 @@ if __name__ == "__main__":
     ################
     # WandB Initialization
     ################
-    # Only initialize wandb on main process (LOCAL_RANK 0 or not set)
+    # Initialize wandb only on rank-0 to avoid duplicate runs in DDP.
     if os.environ.get("LOCAL_RANK", "0") == "0":
         wandb.init(
             entity=script_args.wandb_entity,
@@ -294,7 +299,8 @@ if __name__ == "__main__":
         peft_config=get_peft_config(model_args),
     )
 
-    # Auto-resume from latest checkpoint if one exists
+    # Auto-resume from the numerically latest checkpoint directory to reduce
+    # accidental restarts from scratch after preemption.
     resume_from_checkpoint = None
     if os.path.isdir(training_args.output_dir):
         checkpoints = sorted(

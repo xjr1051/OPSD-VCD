@@ -158,6 +158,7 @@ class OPSDTrainer(SFTTrainer):
         mask_ratio: float = 0.25,
         blur_radius: float = 2.0,
         use_privileged_visual_teacher: bool = False,
+        use_single_visual_teacher: bool = False,
         privileged_visual_field: str = "privileged_visual_evidence",
     ):
         self.model_name_or_path = model if isinstance(model, str) else model.config._name_or_path
@@ -189,6 +190,7 @@ class OPSDTrainer(SFTTrainer):
                 mask_ratio=mask_ratio,
                 blur_radius=blur_radius,
                 use_privileged_visual_teacher=use_privileged_visual_teacher,
+                use_single_visual_teacher=use_single_visual_teacher,
                 privileged_visual_field=privileged_visual_field,
             )
 
@@ -251,6 +253,7 @@ class OPSDTrainer(SFTTrainer):
         self.mask_ratio = mask_ratio
         self.blur_radius = blur_radius
         self.use_privileged_visual_teacher = use_privileged_visual_teacher
+        self.use_single_visual_teacher = use_single_visual_teacher
         self.privileged_visual_field = privileged_visual_field
         self._ema_params = None  # lazily initialized on first optimizer step
 
@@ -271,6 +274,14 @@ class OPSDTrainer(SFTTrainer):
 
         if self.use_image_perturbation_pairs and not self.use_vcd_opsd:
             raise ValueError("use_image_perturbation_pairs=True requires use_vcd_opsd=True.")
+
+        if self.use_single_visual_teacher and not self.use_vcd_opsd:
+            raise ValueError("use_single_visual_teacher=True requires use_vcd_opsd=True.")
+
+        if self.use_single_visual_teacher and self.use_privileged_visual_teacher:
+            raise ValueError(
+                "use_single_visual_teacher=True and use_privileged_visual_teacher=True are mutually exclusive."
+            )
 
         if self.use_privileged_visual_teacher and self.reason_first:
             raise ValueError("use_privileged_visual_teacher=True is not supported with reason_first=True.")
@@ -305,6 +316,7 @@ class OPSDTrainer(SFTTrainer):
             print(f"View field prefix: {self.view_field_prefix}")
             print(f"Pair sampling strategy: {self.pair_sampling_strategy}")
             print(f"Online image perturbation pairs: {self.use_image_perturbation_pairs}")
+            print(f"Single visual teacher branch: {self.use_single_visual_teacher}")
             if self.use_image_perturbation_pairs:
                 print(f"Image field: {self.image_field}")
                 print(
@@ -807,7 +819,7 @@ class OPSDTrainer(SFTTrainer):
             adapter_context = nullcontext()
 
         with torch.no_grad(), adapter_context:
-            if self.use_vcd_opsd and not self.use_privileged_visual_teacher:
+            if self.use_vcd_opsd and not self.use_privileged_visual_teacher and not self.use_single_visual_teacher:
                 # OPSD-on-VCD: keep on-policy trajectory from student, and only replace
                 # the teacher target distribution with VCD-style contrastive logits.
                 teacher_good_prompt_len = inputs["teacher_good_prompt_length"]
@@ -1585,7 +1597,7 @@ class OPSDTrainer(SFTTrainer):
             if prompt_key in inputs:
                 inputs[f"student_{key}"] = inputs[prompt_key]
 
-        if self.use_vcd_opsd and not self.use_privileged_visual_teacher:
+        if self.use_vcd_opsd and not self.use_privileged_visual_teacher and not self.use_single_visual_teacher:
             # Build two teacher branches using the same sampled trajectory.
             teacher_good_prompts = inputs["teacher_good_prompts"]
             teacher_bad_prompts = inputs["teacher_bad_prompts"]
