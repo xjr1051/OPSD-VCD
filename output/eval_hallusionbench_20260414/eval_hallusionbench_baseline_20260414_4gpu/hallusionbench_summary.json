@@ -1,0 +1,62 @@
+{
+  "num_questions": 1129,
+  "num_vd_questions": 591,
+  "num_vs_questions": 538,
+  "leaderboard_metrics": {
+    "acc_per_question_pair": 28.3516,
+    "acc_per_figure": 36.9942,
+    "acc_per_easy_question": 60.6593,
+    "acc_per_hard_question": 51.1628,
+    "acc_per_question": 60.7617
+  },
+  "question_accuracy": {
+    "VD": 54.4839,
+    "VS": 67.658,
+    "Overall": 60.7617
+  },
+  "question_pair_accuracy": {
+    "VD": {
+      "Easy": 64.2599,
+      "Hard": 46.7153,
+      "Total": 27.4368
+    },
+    "VS": {
+      "Easy": 55.0562,
+      "Hard": 58.9744,
+      "Total": 29.7753
+    },
+    "Overall": {
+      "Easy": 60.6593,
+      "Hard": 51.1628,
+      "Total": 28.3516
+    }
+  },
+  "figure_accuracy": {
+    "VD": {
+      "Correct": 32.6087,
+      "Wrong": 67.3913,
+      "Score": 0.5801
+    },
+    "VS": {
+      "Correct": 45.6897,
+      "Wrong": 54.3104,
+      "Score": 0.7011
+    },
+    "Overall": {
+      "Correct": 36.9942,
+      "Wrong": 63.0058,
+      "Score": 0.6207
+    }
+  },
+  "analysis": {
+    "yes_no_bias_pct_diff": 0.208149,
+    "yes_no_bias_fp_ratio": 0.765237,
+    "consistency_correct": 36.9942,
+    "consistency_inconsistent": 48.5549,
+    "consistency_wrong": 14.4509,
+    "lh_pct": 36.1174,
+    "vi_pct": 39.2777,
+    "mix_pct": 24.605
+  },
+  "note": "This run uses deterministic Yes/No/Uncertain parsing from model outputs (no GPT correctness judge)."
+}

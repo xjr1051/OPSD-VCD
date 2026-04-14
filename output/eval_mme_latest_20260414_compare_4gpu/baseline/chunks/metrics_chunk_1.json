@@ -1,0 +1,73 @@
+{
+  "per_category": {
+    "celebrity": {
+      "num_questions": 186,
+      "num_pairs": 93,
+      "num_correct": 156,
+      "num_pair_correct": 66,
+      "acc": 83.87096774193549,
+      "acc_plus": 70.96774193548387,
+      "score": 154.83870967741936
+    },
+    "code_reasoning": {
+      "num_questions": 40,
+      "num_pairs": 20,
+      "num_correct": 35,
+      "num_pair_correct": 15,
+      "acc": 87.5,
+      "acc_plus": 75.0,
+      "score": 162.5
+    },
+    "color": {
+      "num_questions": 60,
+      "num_pairs": 30,
+      "num_correct": 56,
+      "num_pair_correct": 26,
+      "acc": 93.33333333333333,
+      "acc_plus": 86.66666666666667,
+      "score": 180.0
+    },
+    "commonsense_reasoning": {
+      "num_questions": 140,
+      "num_pairs": 70,
+      "num_correct": 90,
+      "num_pair_correct": 33,
+      "acc": 64.28571428571429,
+      "acc_plus": 47.14285714285714,
+      "score": 111.42857142857143
+    },
+    "count": {
+      "num_questions": 60,
+      "num_pairs": 30,
+      "num_correct": 50,
+      "num_pair_correct": 22,
+      "acc": 83.33333333333334,
+      "acc_plus": 73.33333333333333,
+      "score": 156.66666666666669
+    },
+    "existence": {
+      "num_questions": 60,
+      "num_pairs": 30,
+      "num_correct": 59,
+      "num_pair_correct": 29,
+      "acc": 98.33333333333333,
+      "acc_plus": 96.66666666666667,
+      "score": 195.0
+    },
+    "landmark": {
+      "num_questions": 48,
+      "num_pairs": 24,
+      "num_correct": 41,
+      "num_pair_correct": 17,
+      "acc": 85.41666666666666,
+      "acc_plus": 70.83333333333334,
+      "score": 156.25
+    }
+  },
+  "totals": {
+    "perception": 842.755376344086,
+    "cognition": 273.92857142857144,
+    "total": 1116.6839477726576
+  },
+  "num_predictions": 594
+}

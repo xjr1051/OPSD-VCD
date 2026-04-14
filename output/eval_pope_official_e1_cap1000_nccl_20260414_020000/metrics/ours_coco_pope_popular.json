@@ -1,0 +1,14 @@
+{
+  "precision": 0.9560702875399361,
+  "recall": 0.798,
+  "f1": 0.8699127906976744,
+  "accuracy": 0.8806666666666667,
+  "yes": 0.41733333333333333,
+  "unknow": 0.0,
+  "true_pos": 1197,
+  "true_neg": 1445,
+  "false_pos": 55,
+  "false_neg": 303,
+  "unknown": 0,
+  "total_questions": 3000
+}

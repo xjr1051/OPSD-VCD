@@ -266,6 +266,10 @@ python eval/eval_pope.py \
 - `eval/evaluate_mme_qwen25vl.py`：MME 评测主脚本（支持 `acc`、`acc+`、score 汇总）。
 - `scripts/run_mme_eval.sh`：单模型 MME 一键评测（支持 4 卡 chunk 并行）。
 - `scripts/run_mme_compare.sh`：同一评测逻辑连续跑 baseline + ours，并输出差值表。
+- `scripts/prepare_mmhal_data.sh`：MMHal 数据准备（支持已存在数据快速跳过）。
+- `eval/evaluate_mmhal_qwen25vl.py`：MMHal 生成评测脚本（支持 chunk 并行）。
+- `scripts/run_mmhal_eval.sh`：单模型 MMHal 一键评测（支持 4 卡 chunk 并行）。
+- `scripts/run_mmhal_compare.sh`：同一评测逻辑连续跑 baseline + ours，并输出差值表。
 
 ## 11. 训练分支与开启方式（2026-04-13）
 
@@ -482,7 +486,7 @@ bash scripts/run_opsd_vcd_debug_4gpu.sh
 
 如果你要，我可以下一步直接给你一条“安全清理命令”，只删旧 logs 和旧 wandb run，不动当前正在跑的最新 run。
 
-## 2026-04-14 今日工作汇总（30-step 快速 + 1000-step 全训练 + POPE + MME）
+## 2026-04-14 今日工作汇总（30-step 快速 + 1000-step 全训练 + POPE + MME + MMHal）
 
 ### A. 新增评测能力
 
@@ -581,4 +585,35 @@ bash scripts/run_mme_compare.sh
 
 ```bash
 rm -rf output/eval_mme*
+```
+
+### H. MMHal 最新对照结果（4 卡并行）
+
+- 输出根目录：`output/eval_mmhal_compare_latest_20260414_4gpu`
+- ours 汇总：`output/eval_mmhal_compare_latest_20260414_4gpu/ours/mmhal_summary.json`
+- baseline 汇总：`output/eval_mmhal_compare_latest_20260414_4gpu/baseline/mmhal_summary.json`
+- 差值表：`output/eval_mmhal_compare_latest_20260414_4gpu/mmhal_compare_ours_vs_baseline.md`
+
+本次为生成侧统计对比（官方 MMHal 分数依赖 GPT-4 judge API）：
+
+- 样本数：ours `96`，baseline `96`
+- 空回答：ours `0`，baseline `0`
+- 平均回答词数：baseline `17.5208` -> ours `18.1042`（`+0.5833`）
+- 平均回答字符数：baseline `149.9062` -> ours `152.8125`（`+2.9062`）
+
+### I. 复现命令（MMHal baseline + ours）
+
+```bash
+source /etc/network_turbo
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate opsd
+
+OUTPUT_ROOT=/root/autodl-tmp/opsd/output/eval_mmhal_compare_latest_20260414_4gpu \
+MMHAL_ROOT=/root/autodl-tmp/opsd/data/MMHal-Bench \
+BASELINE_MODEL_PATH=/root/autodl-tmp/models/Qwen2.5-VL-3B-Instruct \
+OURS_MODEL_PATH=/root/autodl-tmp/opsd/output/opsd_full_4gpu/opsd_vcd_single_teacher_e1_cap1000_nccl_20260414_020000 \
+OURS_BASE_MODEL_PATH=/root/autodl-tmp/models/Qwen2.5-VL-3B-Instruct \
+PROCESSOR_PATH=/root/autodl-tmp/models/Qwen2.5-VL-3B-Instruct \
+BATCH_SIZE=8 PARALLEL_GPUS=4 \
+bash scripts/run_mmhal_compare.sh
 ```

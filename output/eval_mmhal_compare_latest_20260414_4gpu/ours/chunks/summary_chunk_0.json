@@ -1,0 +1,14 @@
+{
+  "num_samples": 24,
+  "avg_response_words": 16.208333333333332,
+  "question_type_counts": {
+    "adversarial": 3,
+    "attribute": 3,
+    "comparison": 3,
+    "counting": 3,
+    "environment": 3,
+    "holistic": 3,
+    "other": 3,
+    "relation": 3
+  }
+}

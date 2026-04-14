@@ -1,0 +1,46 @@
+{
+  "per_category": {
+    "landmark": {
+      "num_questions": 352,
+      "num_pairs": 176,
+      "num_correct": 313,
+      "num_pair_correct": 137,
+      "acc": 88.92045454545455,
+      "acc_plus": 77.8409090909091,
+      "score": 166.76136363636363
+    },
+    "numerical_calculation": {
+      "num_questions": 40,
+      "num_pairs": 20,
+      "num_correct": 31,
+      "num_pair_correct": 11,
+      "acc": 77.5,
+      "acc_plus": 55.00000000000001,
+      "score": 132.5
+    },
+    "position": {
+      "num_questions": 60,
+      "num_pairs": 30,
+      "num_correct": 53,
+      "num_pair_correct": 23,
+      "acc": 88.33333333333333,
+      "acc_plus": 76.66666666666667,
+      "score": 165.0
+    },
+    "poster": {
+      "num_questions": 142,
+      "num_pairs": 71,
+      "num_correct": 124,
+      "num_pair_correct": 55,
+      "acc": 87.32394366197182,
+      "acc_plus": 77.46478873239437,
+      "score": 164.7887323943662
+    }
+  },
+  "totals": {
+    "perception": 496.55009603072983,
+    "cognition": 132.5,
+    "total": 629.0500960307298
+  },
+  "num_predictions": 594
+}

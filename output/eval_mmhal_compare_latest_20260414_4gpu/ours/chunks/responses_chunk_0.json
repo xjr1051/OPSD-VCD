@@ -1,0 +1,413 @@
+[
+  {
+    "question_type": "attribute",
+    "question_topic": "outdoor",
+    "image_id": "df62a56fdc1bb12b",
+    "image_src": "https://c4.staticflickr.com/8/7211/7206072054_c53d53b97d_o.jpg",
+    "image_content": [
+      "Fire hydrant"
+    ],
+    "question": "What color is the fire hydrant cap in the picture?",
+    "gt_answer": "The color of the fire hydrant cap in the image is yellow.",
+    "model_answer": "The fire hydrant cap in the picture is yellow.",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/7206072054_c53d53b97d_o.jpg"
+  },
+  {
+    "question_type": "adversarial",
+    "question_topic": "outdoor",
+    "image_id": "5b18b22f53ccc661",
+    "image_src": "https://farm2.staticflickr.com/5443/7413067568_06a8d1eb64_o.jpg",
+    "image_content": [
+      "Door",
+      "Building"
+    ],
+    "question": "Who is sitting on the bench?",
+    "gt_answer": "No one is sitting on the bench.",
+    "model_answer": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/7413067568_06a8d1eb64_o.jpg"
+  },
+  {
+    "question_type": "comparison",
+    "question_topic": "outdoor",
+    "image_id": "71d35c01e3b47a47",
+    "image_src": "https://farm8.staticflickr.com/137/383965780_db4815011c_o.jpg",
+    "image_content": [
+      "Vase",
+      "Houseplant",
+      "Stool",
+      "Coffee table",
+      "Flower"
+    ],
+    "question": "Which wooden stool has a vase with red flower on it?",
+    "gt_answer": "The left wooden stool has a vase with a red flower on it.",
+    "model_answer": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/383965780_db4815011c_o.jpg"
+  },
+  {
+    "question_type": "counting",
+    "question_topic": "outdoor",
+    "image_id": "2c0e54cb2dcad01d",
+    "image_src": "https://c6.staticflickr.com/8/7618/16875241476_3b79e5d79b_o.jpg",
+    "image_content": [
+      "Traffic light",
+      "Building",
+      "House",
+      "Street light",
+      "Tree"
+    ],
+    "question": "How many traffic lights are there in the image?",
+    "gt_answer": "There are four traffic lights in the image.",
+    "model_answer": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/16875241476_3b79e5d79b_o.jpg"
+  },
+  {
+    "question_type": "relation",
+    "question_topic": "outdoor",
+    "image_id": "03d45f0207d68aa2",
+    "image_src": "https://farm3.staticflickr.com/3640/3576366805_eea15333d5_o.jpg",
+    "image_content": [
+      "Traffic sign",
+      "Traffic light",
+      "Building"
+    ],
+    "question": "What colors are the traffic signs at the top, in the middle, and at the bottom?",
+    "gt_answer": "The traffic signs at the top and bottom are white, while the one in the center is blue.",
+    "model_answer": "The traffic signs at the top are white with black text, the sign in the middle is blue with white text, and the sign at the bottom is white with black text.",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/3576366805_eea15333d5_o.jpg"
+  },
+  {
+    "question_type": "environment",
+    "question_topic": "outdoor",
+    "image_id": "2e1d92ec24b8f5f9",
+    "image_src": "https://c2.staticflickr.com/4/3452/3788392512_2a3f537219_o.jpg",
+    "image_content": [
+      "Wheel"
+    ],
+    "question": "How would you describe the weather in the image?",
+    "gt_answer": "The photo was captured during nighttime, with a dark sky overhead. It depicts a Ferris wheel surrounded by people and illuminated by the lights.",
+    "model_answer": "The weather appears to be clear and calm, with no visible signs of rain or strong winds.",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/3788392512_2a3f537219_o.jpg"
+  },
+  {
+    "question_type": "holistic",
+    "question_topic": "outdoor",
+    "image_id": "294aff231c7c290a",
+    "image_src": "https://c3.staticflickr.com/6/5558/14388226720_c54b67588a_o.jpg",
+    "image_content": [
+      "Building",
+      "Street light",
+      "Tree",
+      "Traffic sign",
+      "Window"
+    ],
+    "question": "Describe the image in detail.",
+    "gt_answer": "The picture depicts a city street, recently dampened by rain, with a sidewalk lined by trees. There are several cars parked on the right, while others move along the road. A few pedestrians can be seen at a distance on the sidewalk, some of them holding umbrellas to protect themselves from the rain. The trees offer shade and lend a touch of nature to the urban setting. The scene exudes a sense of calm and serenity, emphasized by the glistening wet street and the nearly vacant walkway.",
+    "model_answer": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/14388226720_c54b67588a_o.jpg"
+  },
+  {
+    "question_type": "other",
+    "question_topic": "outdoor",
+    "image_id": "2462520ae7b86d0e",
+    "image_src": "https://c7.staticflickr.com/6/5506/11715451803_24861529ab_o.jpg",
+    "image_content": [
+      "Parking meter",
+      "Telephone"
+    ],
+    "question": "How much is it per hour to park at the parking meter?",
+    "gt_answer": "It is $4 per hour to park at the parking meter.",
+    "model_answer": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/11715451803_24861529ab_o.jpg"
+  },
+  {
+    "question_type": "attribute",
+    "question_topic": "vehicle",
+    "image_id": "01e8509529aac2b8",
+    "image_src": "https://c1.staticflickr.com/1/463/20076975362_949c5a1cdb_o.jpg",
+    "image_content": [
+      "Car",
+      "Wheel",
+      "Land vehicle",
+      "Building"
+    ],
+    "question": "What color are the two cars from right to left in the image?",
+    "gt_answer": "The two cars from right to left in the image are black and blue.",
+    "model_answer": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/20076975362_949c5a1cdb_o.jpg"
+  },
+  {
+    "question_type": "adversarial",
+    "question_topic": "vehicle",
+    "image_id": "1cdd5f88863aec33",
+    "image_src": "https://farm4.staticflickr.com/2503/3828840628_e625c9beb0_o.jpg",
+    "image_content": [
+      "Tire",
+      "Motorcycle",
+      "Wheel"
+    ],
+    "question": "What is the gender of the person riding the motorcycle in the image?",
+    "gt_answer": "No one is riding the motorcycle by the roadside in the image.",
+    "model_answer": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/3828840628_e625c9beb0_o.jpg"
+  },
+  {
+    "question_type": "comparison",
+    "question_topic": "vehicle",
+    "image_id": "50ba2afa85a784cb",
+    "image_src": "https://c4.staticflickr.com/2/1196/1424845359_c4945d38f1_o.jpg",
+    "image_content": [
+      "Wheel",
+      "Building",
+      "Truck",
+      "Person",
+      "Auto part"
+    ],
+    "question": "In the image, which truck (left or right) has its door open?",
+    "gt_answer": "The fire truck, which is on the left side of the image, has its door open.",
+    "model_answer": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/1424845359_c4945d38f1_o.jpg"
+  },
+  {
+    "question_type": "counting",
+    "question_topic": "vehicle",
+    "image_id": "aec20da322ac2ace",
+    "image_src": "https://c7.staticflickr.com/1/100/315943393_e2c5dc5bd7_o.jpg",
+    "image_content": [
+      "Tree",
+      "Plant",
+      "Person",
+      "Land vehicle",
+      "Bicycle helmet",
+      "Sports equipment",
+      "Bicycle",
+      "Vehicle",
+      "Mammal",
+      "Bicycle wheel"
+    ],
+    "question": "How many bicycles are there in the image?",
+    "gt_answer": "In the image, there are four bicycles: two at the front, one in the middle, and one in the distance.",
+    "model_answer": "There are three bicycles visible in the image.",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/315943393_e2c5dc5bd7_o.jpg"
+  },
+  {
+    "question_type": "relation",
+    "question_topic": "vehicle",
+    "image_id": "590b56abc568010b",
+    "image_src": "https://c4.staticflickr.com/5/4086/5014730631_9c2701e063_o.jpg",
+    "image_content": [
+      "Person",
+      "Mammal",
+      "Boat"
+    ],
+    "question": "How is the yellow boat positioned in relation to the white yacht in the image?",
+    "gt_answer": "The yellow boat is positioned in front of the white yacht in the image.",
+    "model_answer": "The yellow boat is positioned in front of the white yacht.",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/5014730631_9c2701e063_o.jpg"
+  },
+  {
+    "question_type": "environment",
+    "question_topic": "vehicle",
+    "image_id": "9baac3ede8933b48",
+    "image_src": "https://c1.staticflickr.com/4/3386/3430256574_ab887d1df5_o.jpg",
+    "image_content": [
+      "Train",
+      "Skyscraper",
+      "Car",
+      "Land vehicle",
+      "Plant",
+      "Vehicle",
+      "Wheel",
+      "Tree"
+    ],
+    "question": "What is the weather like in the image?",
+    "gt_answer": "In the image, the weather appears to be either sunny or cloudy.",
+    "model_answer": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/3430256574_ab887d1df5_o.jpg"
+  },
+  {
+    "question_type": "holistic",
+    "question_topic": "vehicle",
+    "image_id": "a822376f2d79b90f",
+    "image_src": "https://c8.staticflickr.com/5/4033/4523458956_0b78c6b298_o.jpg",
+    "image_content": [
+      "Wheel",
+      "Bus",
+      "Person",
+      "Auto part",
+      "Land vehicle"
+    ],
+    "question": "Describe the image in detail.",
+    "gt_answer": "The picture presents a yellow school bus stationed on an urban roadway, alongside a bicyclist. Positioned outside a tattoo establishment, the bus offers a unique urban backdrop. The road is notably calm, with the absence of other vehicles and passersby. The cyclist, equipped with a backpack and helmet, seems to be a student or a regular commuter. Given the tattoo parlor and the school bus, it's plausible that this area is a vibrant commercial or recreational hub frequented by shoppers, students, or those seeking leisure.",
+    "model_answer": "The image depicts an urban street scene featuring a yellow school bus parked on the side of the road. The bus has \"Collins School Bus\" written on its side and is branded with \"Abaco Carriers.\" The bus also displays a stop sign attached to its front.\n\nIn front of the bus, there is a person standing next to a bicycle. This individual appears to be wearing a helmet, a dark jacket, and blue jeans. They have a backpack on their back and seem to be interacting with something on the ground or possibly adjusting their gear.\n\nThe background includes several storefronts. One prominent store has a sign that reads \"R",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/4523458956_0b78c6b298_o.jpg"
+  },
+  {
+    "question_type": "other",
+    "question_topic": "vehicle",
+    "image_id": "a7157a32c782e319",
+    "image_src": "https://c2.staticflickr.com/8/7167/6555470659_4c69a30b73_o.jpg",
+    "image_content": [
+      "Person",
+      "Fixed-wing aircraft"
+    ],
+    "question": "Which company owns the airplane displayed in the back of the image?",
+    "gt_answer": "The airplane in the background of the image is owned by Virgin Airlines.",
+    "model_answer": "The airplane displayed in the back of the image belongs to Virgin Atlantic Airways. This can be identified by the red tail fin with the Virgin logo on it.",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/6555470659_4c69a30b73_o.jpg"
+  },
+  {
+    "question_type": "attribute",
+    "question_topic": "person",
+    "image_id": "d6485beb5b69ea53",
+    "image_src": "https://farm4.staticflickr.com/3839/14901778703_09a206232c_o.jpg",
+    "image_content": [
+      "Plant",
+      "Tree",
+      "Man",
+      "Sports equipment",
+      "Human arm"
+    ],
+    "question": "What are the colors of the shirts worn by the three men from left to right in the image?",
+    "gt_answer": "The three men from left to right in the image are wearing green, blue, and red shirts.",
+    "model_answer": "The three men are wearing shirts of different colors: green, blue, and red.",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/14901778703_09a206232c_o.jpg"
+  },
+  {
+    "question_type": "adversarial",
+    "question_topic": "person",
+    "image_id": "350f86d5d3c2d9c3",
+    "image_src": "https://farm4.staticflickr.com/41/83372724_a17cceb078_o.jpg",
+    "image_content": [
+      "Human head",
+      "Boy",
+      "Human ear",
+      "Human eye",
+      "Human mouth",
+      "Human face",
+      "Man",
+      "Human hair",
+      "Human body",
+      "Mammal",
+      "Human nose",
+      "Clothing"
+    ],
+    "question": "Which color are the glasses that the man in the image is wearing?",
+    "gt_answer": "The man is not wearing glasses.",
+    "model_answer": "The man in the image is not wearing any glasses.",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/83372724_a17cceb078_o.jpg"
+  },
+  {
+    "question_type": "comparison",
+    "question_topic": "person",
+    "image_id": "1e4224b56a0c9ef0",
+    "image_src": "https://farm1.staticflickr.com/3815/9340455006_25a885f7ef_o.jpg",
+    "image_content": [
+      "Clothing",
+      "Human body",
+      "Person",
+      "Man",
+      "Mammal"
+    ],
+    "question": "Who in the picture is wearing trousers?",
+    "gt_answer": "The woman in the image wears the pants.",
+    "model_answer": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/9340455006_25a885f7ef_o.jpg"
+  },
+  {
+    "question_type": "counting",
+    "question_topic": "person",
+    "image_id": "c8028c1f637cee75",
+    "image_src": "https://farm6.staticflickr.com/7307/16189396430_4dce91a9d7_o.jpg",
+    "image_content": [
+      "Girl",
+      "Human head",
+      "Human hair",
+      "Mammal",
+      "Dog",
+      "Person",
+      "Human face"
+    ],
+    "question": "How many people are there in the image?",
+    "gt_answer": "There are four people in the image.",
+    "model_answer": "There are three people in the image.",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/16189396430_4dce91a9d7_o.jpg"
+  },
+  {
+    "question_type": "relation",
+    "question_topic": "person",
+    "image_id": "4ad9295d442500a7",
+    "image_src": "https://farm8.staticflickr.com/3063/2500640631_a4c9abd52c_o.jpg",
+    "image_content": [
+      "Mammal",
+      "Human nose",
+      "Human mouth",
+      "Human face",
+      "Clothing",
+      "Poster",
+      "Person",
+      "Human hair"
+    ],
+    "question": "Where is the girl positioned among the three people in the image?",
+    "gt_answer": "The girl stands on the right among the three individuals in the image.",
+    "model_answer": "The girl is positioned between Spider-Man and another character on the right side of the image.",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/2500640631_a4c9abd52c_o.jpg"
+  },
+  {
+    "question_type": "environment",
+    "question_topic": "person",
+    "image_id": "4701e0acb21f2e68",
+    "image_src": "https://c1.staticflickr.com/3/2766/4264709756_1eb0e9ab45_o.jpg",
+    "image_content": [
+      "Human face",
+      "Fashion accessory",
+      "Human arm",
+      "Human hair",
+      "Human head",
+      "Human leg",
+      "Man",
+      "Human mouth",
+      "Sunglasses",
+      "Human body",
+      "Swimwear",
+      "Boy",
+      "Goggles"
+    ],
+    "question": "Is the man in the picture indoors or outdoors?",
+    "gt_answer": "The man in the photo is outside, sitting on a boat with several oxygen tanks around him.",
+    "model_answer": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/4264709756_1eb0e9ab45_o.jpg"
+  },
+  {
+    "question_type": "holistic",
+    "question_topic": "person",
+    "image_id": "856c000622d66bd9",
+    "image_src": "https://c2.staticflickr.com/4/3501/4068897399_a729022693_o.jpg",
+    "image_content": [
+      "Window",
+      "Clothing",
+      "Person",
+      "Building"
+    ],
+    "question": "Describe the image in detail.",
+    "gt_answer": "The image captures a bustling street lined with various shops and an adjoining sidewalk. Several pedestrians are present, with two individuals notably passing a store with a green sign saying \"Hawkin's Bazaar\". At this store's entrance, a man stands, overseeing a spacious window display that houses diverse items, highlighted by a red and white sign. Interestingly, no trees or parked cars are present in the street. The mood is energetic, showcasing individuals engaged in their daily routines and shopping pursuits.",
+    "model_answer": "The image depicts a storefront named \"Hawkin's Bazaar,\" which is located on a street with a sidewalk covered in fallen autumn leaves. The store has a green and white signboard above its entrance, displaying the name of the store prominently.\n\nInside the store, various items can be seen through the large windows. There appears to be a variety of products displayed, including what looks like toys or collectibles. The interior lighting is bright, illuminating the merchandise clearly.\n\nOutside the store, there are several pedestrians walking by. One person is wearing a hoodie and jeans, while another individual is dressed in a light-colored outfit. The sidewalk",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/4068897399_a729022693_o.jpg"
+  },
+  {
+    "question_type": "other",
+    "question_topic": "person",
+    "image_id": "c3c43c3a0b95b8b7",
+    "image_src": "https://farm8.staticflickr.com/7445/8716117944_a272643aef_o.jpg",
+    "image_content": [
+      "Person",
+      "Clothing",
+      "Sports equipment",
+      "Mammal",
+      "Footwear"
+    ],
+    "question": "What number is the fastest girl wearing in the picture?",
+    "gt_answer": "The fastest girl in the picture is wearing number 1097.",
+    "model_answer": "The fastest girl in the picture is wearing the number 1097.",
+    "image_path": "/root/autodl-tmp/opsd/data/MMHal-Bench/images/8716117944_a272643aef_o.jpg"
+  }
+]

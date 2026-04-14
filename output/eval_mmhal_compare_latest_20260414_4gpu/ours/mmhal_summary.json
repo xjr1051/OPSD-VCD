@@ -1,0 +1,15 @@
+{
+  "num_samples": 96,
+  "avg_response_words": 18.104166666666668,
+  "question_type_counts": {
+    "adversarial": 12,
+    "attribute": 12,
+    "comparison": 12,
+    "counting": 12,
+    "environment": 12,
+    "holistic": 12,
+    "other": 12,
+    "relation": 12
+  },
+  "note": "Official MMHal scoring requires GPT-4 judge (OpenAI API). This file contains generation-side statistics only."
+}

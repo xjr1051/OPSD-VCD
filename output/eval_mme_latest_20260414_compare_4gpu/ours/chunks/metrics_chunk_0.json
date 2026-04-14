@@ -1,0 +1,37 @@
+{
+  "per_category": {
+    "artwork": {
+      "num_questions": 400,
+      "num_pairs": 200,
+      "num_correct": 328,
+      "num_pair_correct": 135,
+      "acc": 82.0,
+      "acc_plus": 67.5,
+      "score": 149.5
+    },
+    "celebrity": {
+      "num_questions": 154,
+      "num_pairs": 77,
+      "num_correct": 129,
+      "num_pair_correct": 53,
+      "acc": 83.76623376623377,
+      "acc_plus": 68.83116883116884,
+      "score": 152.5974025974026
+    },
+    "ocr": {
+      "num_questions": 40,
+      "num_pairs": 20,
+      "num_correct": 30,
+      "num_pair_correct": 11,
+      "acc": 75.0,
+      "acc_plus": 55.00000000000001,
+      "score": 130.0
+    }
+  },
+  "totals": {
+    "perception": 432.0974025974026,
+    "cognition": 0.0,
+    "total": 432.0974025974026
+  },
+  "num_predictions": 594
+}

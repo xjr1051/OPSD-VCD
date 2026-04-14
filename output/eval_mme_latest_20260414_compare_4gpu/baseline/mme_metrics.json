@@ -1,0 +1,136 @@
+{
+  "per_category": {
+    "artwork": {
+      "num_questions": 400,
+      "num_pairs": 200,
+      "num_correct": 324,
+      "num_pair_correct": 130,
+      "acc": 81.0,
+      "acc_plus": 65.0,
+      "score": 146.0
+    },
+    "celebrity": {
+      "num_questions": 340,
+      "num_pairs": 170,
+      "num_correct": 285,
+      "num_pair_correct": 119,
+      "acc": 83.82352941176471,
+      "acc_plus": 70.0,
+      "score": 153.8235294117647
+    },
+    "code_reasoning": {
+      "num_questions": 40,
+      "num_pairs": 20,
+      "num_correct": 35,
+      "num_pair_correct": 15,
+      "acc": 87.5,
+      "acc_plus": 75.0,
+      "score": 162.5
+    },
+    "color": {
+      "num_questions": 60,
+      "num_pairs": 30,
+      "num_correct": 56,
+      "num_pair_correct": 26,
+      "acc": 93.33333333333333,
+      "acc_plus": 86.66666666666667,
+      "score": 180.0
+    },
+    "commonsense_reasoning": {
+      "num_questions": 140,
+      "num_pairs": 70,
+      "num_correct": 90,
+      "num_pair_correct": 33,
+      "acc": 64.28571428571429,
+      "acc_plus": 47.14285714285714,
+      "score": 111.42857142857143
+    },
+    "count": {
+      "num_questions": 60,
+      "num_pairs": 30,
+      "num_correct": 50,
+      "num_pair_correct": 22,
+      "acc": 83.33333333333334,
+      "acc_plus": 73.33333333333333,
+      "score": 156.66666666666669
+    },
+    "existence": {
+      "num_questions": 60,
+      "num_pairs": 30,
+      "num_correct": 59,
+      "num_pair_correct": 29,
+      "acc": 98.33333333333333,
+      "acc_plus": 96.66666666666667,
+      "score": 195.0
+    },
+    "landmark": {
+      "num_questions": 400,
+      "num_pairs": 200,
+      "num_correct": 353,
+      "num_pair_correct": 153,
+      "acc": 88.25,
+      "acc_plus": 76.5,
+      "score": 164.75
+    },
+    "numerical_calculation": {
+      "num_questions": 40,
+      "num_pairs": 20,
+      "num_correct": 32,
+      "num_pair_correct": 12,
+      "acc": 80.0,
+      "acc_plus": 60.0,
+      "score": 140.0
+    },
+    "ocr": {
+      "num_questions": 40,
+      "num_pairs": 20,
+      "num_correct": 30,
+      "num_pair_correct": 11,
+      "acc": 75.0,
+      "acc_plus": 55.00000000000001,
+      "score": 130.0
+    },
+    "position": {
+      "num_questions": 60,
+      "num_pairs": 30,
+      "num_correct": 53,
+      "num_pair_correct": 23,
+      "acc": 88.33333333333333,
+      "acc_plus": 76.66666666666667,
+      "score": 165.0
+    },
+    "poster": {
+      "num_questions": 294,
+      "num_pairs": 147,
+      "num_correct": 261,
+      "num_pair_correct": 117,
+      "acc": 88.77551020408163,
+      "acc_plus": 79.59183673469387,
+      "score": 168.36734693877548
+    },
+    "scene": {
+      "num_questions": 400,
+      "num_pairs": 200,
+      "num_correct": 333,
+      "num_pair_correct": 137,
+      "acc": 83.25,
+      "acc_plus": 68.5,
+      "score": 151.75
+    },
+    "text_translation": {
+      "num_questions": 40,
+      "num_pairs": 20,
+      "num_correct": 40,
+      "num_pair_correct": 20,
+      "acc": 100.0,
+      "acc_plus": 100.0,
+      "score": 200.0
+    }
+  },
+  "totals": {
+    "perception": 1611.3575430172068,
+    "cognition": 613.9285714285714,
+    "total": 2225.2861144457784
+  },
+  "num_predictions": 2374
+}

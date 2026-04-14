@@ -1,0 +1,39 @@
+{
+  "num_samples": 96,
+  "avg_score": 1.8541666666666667,
+  "hallucination_rate": 0.6458333333333334,
+  "avg_score_by_question_type": {
+    "adversarial": 2.25,
+    "attribute": 1.3333333333333333,
+    "comparison": 1.3333333333333333,
+    "counting": 2.0,
+    "environment": 2.1666666666666665,
+    "holistic": 0.5833333333333334,
+    "other": 2.3333333333333335,
+    "relation": 2.8333333333333335
+  },
+  "avg_score_by_index_mod8": [
+    1.3333333333333333,
+    2.25,
+    1.3333333333333333,
+    2.0,
+    2.8333333333333335,
+    2.1666666666666665,
+    0.5833333333333334,
+    2.3333333333333335
+  ],
+  "rating_scale": {
+    "6": "very informative with good analysis or reasoning, no hallucination",
+    "5": "very informative, no hallucination",
+    "4": "somewhat informative, no hallucination",
+    "3": "not informative, no hallucination",
+    "2": "very informative, with hallucination",
+    "1": "somewhat informative, with hallucination",
+    "0": "not informative, with hallucination"
+  },
+  "judge_model": "gpt-4o",
+  "judge_api_base": "https://yunwu.ai/v1",
+  "response_file": "output/eval_mmhal_compare_latest_20260414_4gpu/ours/mmhal_responses.json",
+  "output_file": "output/eval_mmhal_compare_latest_20260414_4gpu/ours/mmhal_judge_raw_yunwu_rerun.json",
+  "scored_file": "output/eval_mmhal_compare_latest_20260414_4gpu/ours/mmhal_judge_scored_yunwu_rerun.json"
+}

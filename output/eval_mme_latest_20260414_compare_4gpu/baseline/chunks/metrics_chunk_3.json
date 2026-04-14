@@ -1,0 +1,37 @@
+{
+  "per_category": {
+    "poster": {
+      "num_questions": 152,
+      "num_pairs": 76,
+      "num_correct": 136,
+      "num_pair_correct": 61,
+      "acc": 89.47368421052632,
+      "acc_plus": 80.26315789473685,
+      "score": 169.73684210526318
+    },
+    "scene": {
+      "num_questions": 400,
+      "num_pairs": 200,
+      "num_correct": 333,
+      "num_pair_correct": 137,
+      "acc": 83.25,
+      "acc_plus": 68.5,
+      "score": 151.75
+    },
+    "text_translation": {
+      "num_questions": 40,
+      "num_pairs": 20,
+      "num_correct": 40,
+      "num_pair_correct": 20,
+      "acc": 100.0,
+      "acc_plus": 100.0,
+      "score": 200.0
+    }
+  },
+  "totals": {
+    "perception": 321.4868421052632,
+    "cognition": 200.0,
+    "total": 521.4868421052631
+  },
+  "num_predictions": 592
+}
