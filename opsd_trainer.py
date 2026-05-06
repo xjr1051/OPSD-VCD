@@ -155,8 +155,22 @@ class OPSDTrainer(SFTTrainer):
         image_field: str = "image",
         image_token: str = "<image>",
         noise_std: float = 25.0,
+        noise_steps: int = 500,
+        use_tensor_diffusion_noise: bool = False,
+        teacher_confidence_threshold: float = 0.0,
+        teacher_confidence_min_keep: int = 0,
+        use_margin_loss: bool = False,
+        margin_loss_value: float = 0.5,
         mask_ratio: float = 0.25,
+        mask_min_ratio: float | None = None,
+        mask_max_ratio: float | None = None,
+        mask_count: int = 1,
         blur_radius: float = 2.0,
+        fg_mask_keep_ratio: float = 0.35,
+        fg_mask_center_bias: float = 0.15,
+        object_bbox_field: str = "",
+        target_object_field: str = "",
+        object_bbox_label_field: str = "",
         use_privileged_visual_teacher: bool = False,
         use_single_visual_teacher: bool = False,
         privileged_visual_field: str = "privileged_visual_evidence",
@@ -187,8 +201,18 @@ class OPSDTrainer(SFTTrainer):
                 image_field=image_field,
                 image_token=image_token,
                 noise_std=noise_std,
+                noise_steps=noise_steps,
+                use_tensor_diffusion_noise=use_tensor_diffusion_noise,
                 mask_ratio=mask_ratio,
+                mask_min_ratio=mask_min_ratio,
+                mask_max_ratio=mask_max_ratio,
+                mask_count=mask_count,
                 blur_radius=blur_radius,
+                fg_mask_keep_ratio=fg_mask_keep_ratio,
+                fg_mask_center_bias=fg_mask_center_bias,
+                object_bbox_field=object_bbox_field,
+                target_object_field=target_object_field,
+                object_bbox_label_field=object_bbox_label_field,
                 use_privileged_visual_teacher=use_privileged_visual_teacher,
                 use_single_visual_teacher=use_single_visual_teacher,
                 privileged_visual_field=privileged_visual_field,
@@ -250,7 +274,16 @@ class OPSDTrainer(SFTTrainer):
         self.image_field = image_field
         self.image_token = image_token
         self.noise_std = noise_std
+        self.noise_steps = noise_steps
+        self.use_tensor_diffusion_noise = use_tensor_diffusion_noise
+        self.teacher_confidence_threshold = teacher_confidence_threshold
+        self.teacher_confidence_min_keep = teacher_confidence_min_keep
+        self.use_margin_loss = use_margin_loss
+        self.margin_loss_value = margin_loss_value
         self.mask_ratio = mask_ratio
+        self.mask_min_ratio = mask_min_ratio
+        self.mask_max_ratio = mask_max_ratio
+        self.mask_count = mask_count
         self.blur_radius = blur_radius
         self.use_privileged_visual_teacher = use_privileged_visual_teacher
         self.use_single_visual_teacher = use_single_visual_teacher
@@ -268,6 +301,9 @@ class OPSDTrainer(SFTTrainer):
             raise ValueError(
                 "use_ema_teacher=True and fixed_teacher=True are mutually exclusive teacher strategies."
             )
+
+        if self.use_margin_loss and self.use_thinking_machines_loss:
+            raise ValueError("use_margin_loss=True is incompatible with use_thinking_machines_loss=True.")
 
         if self.use_vcd_opsd and self.reason_first:
             raise ValueError("use_vcd_opsd=True and reason_first=True are mutually exclusive modes.")
@@ -320,12 +356,20 @@ class OPSDTrainer(SFTTrainer):
             if self.use_image_perturbation_pairs:
                 print(f"Image field: {self.image_field}")
                 print(
-                    f"Perturb params -> noise_std: {self.noise_std}, mask_ratio: {self.mask_ratio}, blur_radius: {self.blur_radius}"
+                    "Perturb params -> "
+                    f"noise_std: {self.noise_std}, "
+                    f"mask_ratio: {self.mask_ratio}, "
+                    f"mask_min_ratio: {self.mask_min_ratio if self.mask_min_ratio is not None else self.mask_ratio}, "
+                    f"mask_max_ratio: {self.mask_max_ratio if self.mask_max_ratio is not None else self.mask_ratio}, "
+                    f"mask_count: {self.mask_count}, "
+                    f"blur_radius: {self.blur_radius}"
                 )
             print(
                 "Student trajectories are sampled on student-side views from each pair; "
                 "teacher supervision uses stronger or privileged visual evidence."
             )
+            if self.use_margin_loss:
+                print(f"Gold-token margin loss enabled (margin={self.margin_loss_value})")
             print(
                 f"Legacy fallback fields -> teacher: {self.good_view_field}, student: {self.bad_view_field}"
             )
@@ -506,6 +550,7 @@ class OPSDTrainer(SFTTrainer):
         student_logits,
         teacher_logits,
         labels=None,
+        token_mask=None,
         beta=0.5,
         temperature=1.0,
         reduction="batchmean",
@@ -587,19 +632,92 @@ class OPSDTrainer(SFTTrainer):
             jsd = jsd.clamp(max=token_clip)
 
         # Masking
+        mask = None
         if labels is not None:
             mask = labels != -100
+        if token_mask is not None:
+            mask = token_mask if mask is None else (mask & token_mask)
+        if mask is not None:
             jsd = jsd[mask]
 
         # Apply reduction
         if reduction == "batchmean":
-            return jsd.sum() / mask.sum() if labels is not None else jsd.sum() / jsd.size(0)
+            if mask is not None:
+                denom = mask.sum()
+                if denom.item() == 0:
+                    return jsd.new_zeros(())
+                return jsd.sum() / denom
+            return jsd.sum() / jsd.size(0)
         elif reduction == "sum":
             return jsd.sum()
         elif reduction == "mean":
             return jsd.mean()
         else:
             return jsd
+
+    def _build_teacher_confidence_mask(self, teacher_logits, labels=None):
+        """Return a token-level mask that keeps only high-confidence teacher positions.
+
+        The teacher confidence is measured as max softmax probability at each token position.
+        This keeps distillation focused on positions where the clean teacher is visually grounded,
+        rather than forcing the noisy student to mimic uncertain long-form continuations.
+        """
+        threshold = float(self.teacher_confidence_threshold or 0.0)
+        min_keep = int(self.teacher_confidence_min_keep or 0)
+        if threshold <= 0.0 and min_keep <= 0:
+            return None, None
+
+        teacher_probs = F.softmax(teacher_logits / self.temperature, dim=-1)
+        teacher_conf = teacher_probs.amax(dim=-1)
+        token_mask = torch.ones_like(teacher_conf, dtype=torch.bool)
+        if threshold > 0.0:
+            token_mask = teacher_conf >= threshold
+
+        if labels is not None:
+            valid_mask = labels != -100
+            token_mask = token_mask & valid_mask
+        else:
+            valid_mask = torch.ones_like(token_mask, dtype=torch.bool)
+
+        if min_keep > 0:
+            k = min(min_keep, teacher_conf.size(1))
+            if k > 0:
+                conf_for_topk = teacher_conf.masked_fill(~valid_mask, float("-inf"))
+                topk_indices = conf_for_topk.topk(k=k, dim=-1).indices
+                topk_mask = torch.zeros_like(token_mask)
+                topk_mask.scatter_(1, topk_indices, True)
+                token_mask = token_mask | (topk_mask & valid_mask)
+
+        denom = valid_mask.sum().clamp_min(1)
+        keep_ratio = token_mask.sum().float() / denom.float()
+        return token_mask, keep_ratio
+
+    def _gold_token_margin_loss(self, student_logits, teacher_logits, labels, token_mask=None):
+        """Margin loss on the gold token logit.
+
+        Instead of forcing the noisy student to match the full teacher distribution, we only
+        require the clean teacher to stay ahead on the correct token by a fixed margin. This is
+        a closer training-side proxy for "clean view is more reliable than noisy view".
+        """
+        if labels is None:
+            raise ValueError("margin loss requires gold labels")
+
+        valid_mask = labels != -100
+        if token_mask is not None:
+            valid_mask = valid_mask & token_mask
+        if not valid_mask.any():
+            return teacher_logits.new_zeros(())
+
+        safe_labels = labels.masked_fill(~valid_mask, 0)
+        student_gold = torch.gather(student_logits, dim=-1, index=safe_labels.unsqueeze(-1)).squeeze(-1)
+        teacher_gold = torch.gather(teacher_logits, dim=-1, index=safe_labels.unsqueeze(-1)).squeeze(-1)
+
+        gap = teacher_gold - student_gold
+        loss = F.relu(float(self.margin_loss_value) - gap)
+        loss = loss[valid_mask]
+        if loss.numel() == 0:
+            return teacher_logits.new_zeros(())
+        return loss.mean()
 
     def _update_ema(self):
         """Update EMA parameters after an optimizer step.
@@ -863,6 +981,11 @@ class OPSDTrainer(SFTTrainer):
                 teacher_logits = outputs_teacher.logits[:, teacher_prompt_len - 1 : -1, :]
                 del outputs_teacher
 
+            teacher_conf_mask, teacher_keep_ratio = self._build_teacher_confidence_mask(
+                teacher_logits,
+                shifted_labels,
+            )
+
             if self.use_thinking_machines_loss:
                 teacher_log_probs = F.log_softmax(teacher_logits / self.temperature, dim=-1)
                 teacher_log_probs_sampled = torch.gather(
@@ -887,8 +1010,10 @@ class OPSDTrainer(SFTTrainer):
             advantage = (teacher_log_probs_sampled - student_log_probs_sampled).detach()
 
             # Apply masking before computing loss
-            if shifted_labels is not None:
-                mask = shifted_labels != -100
+            mask = shifted_labels != -100 if shifted_labels is not None else None
+            if teacher_conf_mask is not None:
+                mask = teacher_conf_mask if mask is None else (mask & teacher_conf_mask)
+            if mask is not None:
                 advantage = advantage[mask]
                 student_log_probs_sampled_masked = student_log_probs_sampled[mask]
             else:
@@ -896,7 +1021,10 @@ class OPSDTrainer(SFTTrainer):
 
             # Policy gradient loss: -advantage * log π_student
             # Negative because we minimize loss (gradient descent), but want to maximize reward
-            distill_loss = -(advantage * student_log_probs_sampled_masked).mean()
+            if advantage.numel() == 0:
+                distill_loss = student_log_probs_sampled.new_zeros(())
+            else:
+                distill_loss = -(advantage * student_log_probs_sampled_masked).mean()
 
             del (
                 student_log_probs_sampled,
@@ -905,16 +1033,25 @@ class OPSDTrainer(SFTTrainer):
                 student_log_probs_sampled_masked,
             )
         else:
-            # Temperature is applied inside generalized_jsd_loss
-            distill_loss = self.generalized_jsd_loss(
-                student_logits=student_logits_for_loss,
-                teacher_logits=teacher_logits_for_loss,
-                labels=shifted_labels,
-                beta=self.beta,
-                temperature=self.temperature,  # Let the function handle temperature
-                top_k=self.top_k_loss,
-                token_clip=self.jsd_token_clip,
-            )
+            if self.use_margin_loss:
+                distill_loss = self._gold_token_margin_loss(
+                    student_logits=student_logits_for_loss,
+                    teacher_logits=teacher_logits_for_loss,
+                    labels=shifted_labels,
+                    token_mask=teacher_conf_mask,
+                )
+            else:
+                # Temperature is applied inside generalized_jsd_loss
+                distill_loss = self.generalized_jsd_loss(
+                    student_logits=student_logits_for_loss,
+                    teacher_logits=teacher_logits_for_loss,
+                    labels=shifted_labels,
+                    token_mask=teacher_conf_mask,
+                    beta=self.beta,
+                    temperature=self.temperature,  # Let the function handle temperature
+                    top_k=self.top_k_loss,
+                    token_clip=self.jsd_token_clip,
+                )
             del student_logits_for_loss, teacher_logits_for_loss
 
         # Final objective currently keeps only token-level distillation loss.
@@ -925,6 +1062,8 @@ class OPSDTrainer(SFTTrainer):
         mode = "train" if model.training else "eval"
         self._metrics[mode]["loss_distill"].append(float(distill_loss.detach()))
         self._metrics[mode]["loss_total"].append(float(loss.detach()))
+        if teacher_keep_ratio is not None:
+            self._metrics[mode]["teacher_conf_keep_ratio"].append(float(teacher_keep_ratio.detach()))
 
         empty_cache()
 

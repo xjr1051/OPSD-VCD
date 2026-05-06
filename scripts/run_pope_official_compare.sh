@@ -7,6 +7,11 @@ BASELINE_MODEL_PATH="${BASELINE_MODEL_PATH:-/root/autodl-tmp/models/Qwen2.5-VL-3
 OURS_MODEL_PATH="${OURS_MODEL_PATH:-${REPO_ROOT}/output/opsd_full_4gpu/opsd_vcd_single_teacher_e1_cap1000_nccl_20260414_020000}"
 OURS_BASE_MODEL_PATH="${OURS_BASE_MODEL_PATH:-}"
 PROCESSOR_PATH="${PROCESSOR_PATH:-${BASELINE_MODEL_PATH}}"
+PYTHON_BIN="${PYTHON_BIN:-python}"
+
+if [[ "${OURS_BASE_MODEL_PATH,,}" == "none" ]]; then
+  OURS_BASE_MODEL_PATH=""
+fi
 
 POPE_ROOT="${POPE_ROOT:-${REPO_ROOT}/data/POPE/coco}"
 IMAGE_FOLDER="${IMAGE_FOLDER:-${REPO_ROOT}/data/coco/val2014}"
@@ -17,14 +22,26 @@ ANSWER_DIR="${OUTPUT_ROOT}/answers"
 METRIC_DIR="${OUTPUT_ROOT}/metrics"
 SUMMARY_MD="${OUTPUT_ROOT}/pope_summary.md"
 
-TEMPERATURE="${TEMPERATURE:-0.0}"
+TEMPERATURE="${TEMPERATURE:-1.0}"
 TOP_P="${TOP_P:-1.0}"
 TOP_K="${TOP_K:-}"
-MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-32}"
+MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-20}"
 SEED="${SEED:-42}"
 TORCH_DTYPE="${TORCH_DTYPE:-float16}"
 ATTN_IMPLEMENTATION="${ATTN_IMPLEMENTATION:-sdpa}"
 GEN_BATCH_SIZE="${GEN_BATCH_SIZE:-4}"
+BASELINE_USE_VCD_DECODING="${BASELINE_USE_VCD_DECODING:-0}"
+BASELINE_VCD_ALPHA="${BASELINE_VCD_ALPHA:-1.0}"
+BASELINE_VCD_BETA="${BASELINE_VCD_BETA:-0.1}"
+BASELINE_VCD_GAMMA="${BASELINE_VCD_GAMMA:-0.1}"
+BASELINE_VCD_NOISE_STEPS="${BASELINE_VCD_NOISE_STEPS:-500}"
+BASELINE_VCD_VIEW_PAIR="${BASELINE_VCD_VIEW_PAIR:-clean-noise}"
+OURS_USE_VCD_DECODING="${OURS_USE_VCD_DECODING:-0}"
+OURS_VCD_ALPHA="${OURS_VCD_ALPHA:-1.0}"
+OURS_VCD_BETA="${OURS_VCD_BETA:-0.1}"
+OURS_VCD_GAMMA="${OURS_VCD_GAMMA:-0.1}"
+OURS_VCD_NOISE_STEPS="${OURS_VCD_NOISE_STEPS:-500}"
+OURS_VCD_VIEW_PAIR="${OURS_VCD_VIEW_PAIR:-clean-noise}"
 
 DEFAULT_GPU_COUNT="$(nvidia-smi --list-gpus 2>/dev/null | wc -l | tr -d ' ')"
 if [[ -z "${DEFAULT_GPU_COUNT}" || "${DEFAULT_GPU_COUNT}" -le 0 ]]; then
@@ -37,6 +54,28 @@ mkdir -p "${ANSWER_DIR}" "${METRIC_DIR}"
 run_one_model() {
   local model_tag="$1"
   local model_path="$2"
+  local use_vcd="0"
+  local vcd_alpha="1.0"
+  local vcd_beta="0.1"
+  local vcd_gamma="0.1"
+  local vcd_noise_steps="500"
+  local vcd_view_pair="clean-noise"
+
+  if [[ "${model_tag}" == "baseline" ]]; then
+    use_vcd="${BASELINE_USE_VCD_DECODING}"
+    vcd_alpha="${BASELINE_VCD_ALPHA}"
+    vcd_beta="${BASELINE_VCD_BETA}"
+    vcd_gamma="${BASELINE_VCD_GAMMA}"
+    vcd_noise_steps="${BASELINE_VCD_NOISE_STEPS}"
+    vcd_view_pair="${BASELINE_VCD_VIEW_PAIR}"
+  else
+    use_vcd="${OURS_USE_VCD_DECODING}"
+    vcd_alpha="${OURS_VCD_ALPHA}"
+    vcd_beta="${OURS_VCD_BETA}"
+    vcd_gamma="${OURS_VCD_GAMMA}"
+    vcd_noise_steps="${OURS_VCD_NOISE_STEPS}"
+    vcd_view_pair="${OURS_VCD_VIEW_PAIR}"
+  fi
 
   for split in ${SPLITS}; do
     local question_file="${POPE_ROOT}/coco_pope_${split}.json"
@@ -58,7 +97,7 @@ run_one_model() {
       for ((chunk_idx=0; chunk_idx<GEN_PARALLEL_GPUS; chunk_idx++)); do
         local chunk_file="${chunk_dir}/chunk_${chunk_idx}.jsonl"
         cmd=(
-          python "${REPO_ROOT}/eval/object_hallucination_vqa_qwenvl.py"
+          "${PYTHON_BIN}" "${REPO_ROOT}/eval/object_hallucination_vqa_qwen25vl.py"
           --model-path "${model_path}"
           --processor-path "${PROCESSOR_PATH}"
           --image-folder "${IMAGE_FOLDER}"
@@ -77,6 +116,16 @@ run_one_model() {
 
         if [[ -n "${TOP_K}" ]]; then
           cmd+=(--top_k "${TOP_K}")
+        fi
+        if [[ "${use_vcd}" == "1" ]]; then
+          cmd+=(
+            --use-vcd-decoding
+            --vcd-alpha "${vcd_alpha}"
+            --vcd-beta "${vcd_beta}"
+            --vcd-gamma "${vcd_gamma}"
+            --vcd-noise-steps "${vcd_noise_steps}"
+            --vcd-view-pair "${vcd_view_pair}"
+          )
         fi
 
         if [[ "${model_tag}" == "ours" && -n "${OURS_BASE_MODEL_PATH}" ]]; then
@@ -105,7 +154,7 @@ run_one_model() {
       rm -rf "${chunk_dir}"
     else
       cmd=(
-        python "${REPO_ROOT}/eval/object_hallucination_vqa_qwenvl.py"
+        "${PYTHON_BIN}" "${REPO_ROOT}/eval/object_hallucination_vqa_qwen25vl.py"
         --model-path "${model_path}"
         --processor-path "${PROCESSOR_PATH}"
         --image-folder "${IMAGE_FOLDER}"
@@ -122,6 +171,16 @@ run_one_model() {
 
       if [[ -n "${TOP_K}" ]]; then
         cmd+=(--top_k "${TOP_K}")
+      fi
+      if [[ "${use_vcd}" == "1" ]]; then
+        cmd+=(
+          --use-vcd-decoding
+          --vcd-alpha "${vcd_alpha}"
+          --vcd-beta "${vcd_beta}"
+          --vcd-gamma "${vcd_gamma}"
+          --vcd-noise-steps "${vcd_noise_steps}"
+          --vcd-view-pair "${vcd_view_pair}"
+        )
       fi
 
       if [[ "${model_tag}" == "ours" && -n "${OURS_BASE_MODEL_PATH}" ]]; then

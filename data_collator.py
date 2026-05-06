@@ -1,7 +1,19 @@
 import torch
 import random
 import numpy as np
-from PIL import Image, ImageFilter
+import os
+from PIL import Image
+from PIL import ImageFile
+from io import BytesIO
+from urllib.request import urlopen
+from image_perturbation import (
+    ImagePerturbationConfig,
+    add_diffusion_noise_tensor,
+    apply_image_perturbation,
+    normalize_perturbation_pair,
+)
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 class SelfDistillationDataCollator:
@@ -36,11 +48,22 @@ class SelfDistillationDataCollator:
         image_field="image",
         image_token="<image>",
         noise_std=25.0,
+        noise_steps=500,
+        use_tensor_diffusion_noise=False,
         mask_ratio=0.25,
+        mask_min_ratio=None,
+        mask_max_ratio=None,
+        mask_count=1,
         blur_radius=2.0,
+        fg_mask_keep_ratio=0.35,
+        fg_mask_center_bias=0.15,
+        object_bbox_field="",
+        target_object_field="",
+        object_bbox_label_field="",
         use_privileged_visual_teacher=False,
         use_single_visual_teacher=False,
         privileged_visual_field="privileged_visual_evidence",
+        max_image_side=768,
     ):
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -57,11 +80,29 @@ class SelfDistillationDataCollator:
         self.image_field = image_field
         self.image_token = image_token
         self.noise_std = noise_std
+        self.noise_steps = noise_steps
+        self.use_tensor_diffusion_noise = use_tensor_diffusion_noise
         self.mask_ratio = mask_ratio
+        self.mask_min_ratio = mask_min_ratio
+        self.mask_max_ratio = mask_max_ratio
+        self.mask_count = mask_count
         self.blur_radius = blur_radius
+        self.fg_mask_keep_ratio = fg_mask_keep_ratio
+        self.fg_mask_center_bias = fg_mask_center_bias
+        self.object_bbox_field = object_bbox_field
+        self.target_object_field = target_object_field
+        self.object_bbox_label_field = object_bbox_label_field
         self.use_privileged_visual_teacher = use_privileged_visual_teacher
         self.use_single_visual_teacher = use_single_visual_teacher
         self.privileged_visual_field = privileged_visual_field
+        env_max_image_side = os.environ.get("OPSD_MAX_IMAGE_SIDE")
+        if env_max_image_side is not None:
+            try:
+                self.max_image_side = int(env_max_image_side)
+            except ValueError:
+                self.max_image_side = max_image_side
+        else:
+            self.max_image_side = max_image_side
 
         self.pad_token_id = getattr(self.tokenizer, "pad_token_id", None)
         if self.pad_token_id is None and hasattr(self.tokenizer, "tokenizer"):
@@ -98,6 +139,21 @@ class SelfDistillationDataCollator:
             raise ValueError(
                 "use_single_visual_teacher=True and use_privileged_visual_teacher=True are mutually exclusive."
             )
+
+        self.perturbation_cfg = ImagePerturbationConfig(
+            noise_std=self.noise_std,
+            noise_steps=self.noise_steps,
+            mask_ratio=self.mask_ratio,
+            mask_min_ratio=self.mask_min_ratio,
+            mask_max_ratio=self.mask_max_ratio,
+            mask_count=self.mask_count,
+            blur_radius=self.blur_radius,
+            fg_mask_keep_ratio=self.fg_mask_keep_ratio,
+            fg_mask_center_bias=self.fg_mask_center_bias,
+            object_bbox_field=self.object_bbox_field,
+            target_object_field=self.target_object_field,
+            object_bbox_label_field=self.object_bbox_label_field,
+        )
 
         # Prompt for reasoning about the solution before teaching
         self.reason_first_prompt = (
@@ -145,7 +201,20 @@ class SelfDistillationDataCollator:
         if self.use_image_perturbation_pairs:
             print(f"[DataCollator] Image field: {self.image_field}")
             print(
-                f"[DataCollator] Perturb params: noise_std={self.noise_std}, mask_ratio={self.mask_ratio}, blur_radius={self.blur_radius}"
+                "[DataCollator] Perturb params: "
+                f"noise_std={self.noise_std}, noise_steps={self.noise_steps}, "
+                f"use_tensor_diffusion_noise={self.use_tensor_diffusion_noise}, "
+                f"mask_ratio={self.mask_ratio}, "
+                f"mask_min_ratio={self.mask_min_ratio if self.mask_min_ratio is not None else self.mask_ratio}, "
+                f"mask_max_ratio={self.mask_max_ratio if self.mask_max_ratio is not None else self.mask_ratio}, "
+                f"mask_count={self.mask_count}, blur_radius={self.blur_radius}"
+            )
+            print(
+                "[DataCollator] Foreground mask params: "
+                f"keep_ratio={self.fg_mask_keep_ratio}, center_bias={self.fg_mask_center_bias}, "
+                f"bbox_field={self.object_bbox_field or 'none'}, "
+                f"target_field={self.target_object_field or 'none'}, "
+                f"bbox_label_field={self.object_bbox_label_field or 'none'}"
             )
 
     @staticmethod
@@ -179,13 +248,7 @@ class SelfDistillationDataCollator:
 
     @staticmethod
     def _normalize_perturbation_pair(pair):
-        teacher_tag, student_tag = pair
-        # Experiment convention:
-        # - clean-noise => teacher=clean, student=noise
-        # - clean-mask  => teacher=mask,  student=clean
-        if teacher_tag == "clean" and student_tag == "mask":
-            return ("mask", "clean")
-        return pair
+        return normalize_perturbation_pair(pair)
 
     def _build_view_field_name(self, view_tag):
         return f"{self.view_field_prefix}{view_tag}"
@@ -221,47 +284,62 @@ class SelfDistillationDataCollator:
             return available_pairs[example_idx % len(available_pairs)]
         return random.choice(available_pairs)
 
-    @staticmethod
-    def _to_pil_image(image_obj):
+    def _to_pil_image(self, image_obj):
         if image_obj is None:
             # Some datasets include samples with missing image content.
             # Use a neutral placeholder so training can continue robustly.
-            return Image.new("RGB", (224, 224), color=(255, 255, 255))
+            image = Image.new("RGB", (224, 224), color=(255, 255, 255))
+            return image
         if isinstance(image_obj, Image.Image):
-            return image_obj.convert("RGB")
-        if isinstance(image_obj, np.ndarray):
+            image = image_obj.convert("RGB")
+        elif isinstance(image_obj, str):
+            source = image_obj.strip()
+            try:
+                if source.startswith("http://") or source.startswith("https://"):
+                    with urlopen(source, timeout=30) as resp:
+                        data = resp.read()
+                    image = Image.open(BytesIO(data)).convert("RGB")
+                else:
+                    image = Image.open(source).convert("RGB")
+            except Exception:
+                # Broken/truncated images should not crash training workers.
+                image = Image.new("RGB", (224, 224), color=(255, 255, 255))
+        elif isinstance(image_obj, np.ndarray):
             if image_obj.dtype != np.uint8:
                 image_obj = np.clip(image_obj, 0, 255).astype(np.uint8)
-            return Image.fromarray(image_obj).convert("RGB")
-        raise TypeError(f"Unsupported image type: {type(image_obj)}")
+            image = Image.fromarray(image_obj).convert("RGB")
+        else:
+            raise TypeError(f"Unsupported image type: {type(image_obj)}")
 
-    def _apply_perturbation(self, image_obj, view_tag):
-        # Convert view tags into deterministic transform families so the same
-        # training code can switch between text-view pairs and image-view pairs.
-        image = self._to_pil_image(image_obj)
-        tag = str(view_tag).strip().lower()
+        if isinstance(self.max_image_side, int) and self.max_image_side > 0:
+            w, h = image.size
+            longest = max(w, h)
+            if longest > self.max_image_side:
+                scale = self.max_image_side / float(longest)
+                new_w = max(1, int(round(w * scale)))
+                new_h = max(1, int(round(h * scale)))
+                image = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
-        if tag == "clean":
-            return image
-        if tag == "noise":
-            arr = np.asarray(image).astype(np.float32)
-            noise = np.random.normal(0.0, self.noise_std, size=arr.shape)
-            arr = np.clip(arr + noise, 0.0, 255.0).astype(np.uint8)
-            return Image.fromarray(arr)
-        if tag == "mask":
-            arr = np.asarray(image).copy()
-            h, w = arr.shape[:2]
-            mask_h = max(1, int(h * self.mask_ratio))
-            mask_w = max(1, int(w * self.mask_ratio))
-            top = random.randint(0, max(0, h - mask_h))
-            left = random.randint(0, max(0, w - mask_w))
-            arr[top : top + mask_h, left : left + mask_w] = 0
-            return Image.fromarray(arr)
-        if tag == "blur":
-            return image.filter(ImageFilter.GaussianBlur(radius=self.blur_radius))
-
-        # Unknown tags default to clean so the training loop remains robust.
         return image
+
+    def _apply_perturbation(self, image_obj, view_tag, feature=None):
+        image = self._to_pil_image(image_obj)
+        try:
+            return apply_image_perturbation(image, view_tag, self.perturbation_cfg, feature=feature or {})
+        except ValueError:
+            return image
+
+    def _should_use_tensor_diffusion_noise(self, view_tag):
+        return self.use_tensor_diffusion_noise and str(view_tag).strip().lower() == "noise"
+
+    def _apply_tensor_diffusion_noise_to_encoded(self, encoded, example_indices):
+        if not example_indices or "pixel_values" not in encoded:
+            return encoded
+        pixel_values = encoded["pixel_values"].clone()
+        index_tensor = torch.tensor(example_indices, dtype=torch.long, device=pixel_values.device)
+        pixel_values[index_tensor] = add_diffusion_noise_tensor(pixel_values[index_tensor], self.noise_steps)
+        encoded["pixel_values"] = pixel_values
+        return encoded
 
     @staticmethod
     def _extract_multimodal_fields(encoded):
@@ -314,6 +392,9 @@ class SelfDistillationDataCollator:
         teacher_images = []
         teacher_good_images = []
         teacher_bad_images = []
+        student_tensor_noise_indices = []
+        teacher_bad_tensor_noise_indices = []
+        teacher_good_tensor_noise_indices = []
 
         for idx, feature in enumerate(features):
             # Extract problem and solution from dataset
@@ -344,8 +425,13 @@ class SelfDistillationDataCollator:
                             raise KeyError(f"Missing required image field: {self.image_field}")
 
                         raw_image = feature[self.image_field]
-                        teacher_img = self._apply_perturbation(raw_image, teacher_view_tag)
-                        student_img = self._apply_perturbation(raw_image, student_view_tag)
+                        if self._should_use_tensor_diffusion_noise(teacher_view_tag) or self._should_use_tensor_diffusion_noise(student_view_tag):
+                            base_image = self._to_pil_image(raw_image)
+                            teacher_img = base_image.copy()
+                            student_img = base_image.copy()
+                        else:
+                            teacher_img = self._apply_perturbation(raw_image, teacher_view_tag, feature=feature)
+                            student_img = self._apply_perturbation(raw_image, student_view_tag, feature=feature)
 
                         # In perturbation mode, we isolate the variable to image quality.
                         # Textual condition remains identical by default.
@@ -353,9 +439,15 @@ class SelfDistillationDataCollator:
                         problem_bad_view = problem
 
                         teacher_good_images.append(teacher_img)
+                        if self._should_use_tensor_diffusion_noise(teacher_view_tag):
+                            teacher_good_tensor_noise_indices.append(len(teacher_good_images) - 1)
                         if not self.use_single_visual_teacher:
                             teacher_bad_images.append(student_img)
+                            if self._should_use_tensor_diffusion_noise(student_view_tag):
+                                teacher_bad_tensor_noise_indices.append(len(teacher_bad_images) - 1)
                         student_images.append(student_img)
+                        if self._should_use_tensor_diffusion_noise(student_view_tag):
+                            student_tensor_noise_indices.append(len(student_images) - 1)
                         teacher_images.append(teacher_img)
                     else:
                         teacher_view_field = self._build_view_field_name(teacher_view_tag)
@@ -540,17 +632,26 @@ class SelfDistillationDataCollator:
         # We need these lengths for precise label masking later.
         has_student_images = len(student_images) == len(student_prompts) and len(student_images) > 0
         if has_student_images:
-            # Some multimodal processors are fragile when called with
-            # `padding=False` in batched text+image mode. Use the stable padded
-            # path and derive per-sample lengths from the attention mask.
-            max_student_prompt_len = self.max_length
+            # Measure true prompt lengths first, then pad only to this batch max.
+            # This avoids padding every multimodal batch to global `self.max_length`
+            # which can unnecessarily blow up activation memory.
+            student_encoded_no_pad = self.tokenizer(
+                text=student_prompts,
+                images=student_images,
+                padding=False,
+                truncation=True,
+                max_length=self.max_length,
+            )
+            student_prompt_lengths = [len(ids) for ids in student_encoded_no_pad["input_ids"]]
+            max_student_prompt_len = max(student_prompt_lengths)
             student_encoded = self._tokenize_with_optional_images(
                 student_prompts,
                 max_student_prompt_len,
                 images=student_images,
             )
-            student_prompt_lengths = (
-                student_encoded["attention_mask"].sum(dim=1).tolist()
+            student_encoded = self._apply_tensor_diffusion_noise_to_encoded(
+                student_encoded,
+                student_tensor_noise_indices,
             )
         else:
             student_encoded_no_pad = self._tokenize_text_only(
@@ -683,6 +784,10 @@ class SelfDistillationDataCollator:
                         max_teacher_good_prompt_len,
                         images=teacher_good_images if self.use_image_perturbation_pairs else None,
                     )
+                    teacher_good_encoded = self._apply_tensor_diffusion_noise_to_encoded(
+                        teacher_good_encoded,
+                        teacher_good_tensor_noise_indices,
+                    )
 
                     if self.use_image_perturbation_pairs:
                         teacher_bad_encoded_no_pad = self.tokenizer(
@@ -708,6 +813,10 @@ class SelfDistillationDataCollator:
                         teacher_bad_prompts,
                         max_teacher_bad_prompt_len,
                         images=teacher_bad_images if self.use_image_perturbation_pairs else None,
+                    )
+                    teacher_bad_encoded = self._apply_tensor_diffusion_noise_to_encoded(
+                        teacher_bad_encoded,
+                        teacher_bad_tensor_noise_indices,
                     )
 
                     # Preserve baseline key names (`teacher_prompts`, `teacher_prompt_*`) so

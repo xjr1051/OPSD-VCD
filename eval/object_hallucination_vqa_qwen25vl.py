@@ -2,12 +2,21 @@ import argparse
 import json
 import math
 import os
+import sys
 from pathlib import Path
 
 import torch
 from PIL import Image
 from tqdm import tqdm
 from transformers import AutoModelForImageTextToText, AutoProcessor, set_seed
+
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.append(str(Path(__file__).resolve().parent))
+if str(Path(__file__).resolve().parent.parent) not in sys.path:
+    sys.path.append(str(Path(__file__).resolve().parent.parent))
+
+from vcd_decode_qwen25vl import add_vcd_args, build_generate_kwargs, should_use_vcd, vcd_generate
+from image_perturbation import ImagePerturbationConfig, apply_image_perturbation
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,10 +39,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--answers-file", type=str, required=True, help="Output answer file in JSONL.")
     parser.add_argument("--num-chunks", type=int, default=1, help="Split questions into N chunks.")
     parser.add_argument("--chunk-idx", type=int, default=0, help="Current chunk index.")
-    parser.add_argument("--temperature", type=float, default=0.0, help="Generation temperature.")
+    parser.add_argument("--temperature", type=float, default=1.0, help="Generation temperature.")
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p sampling.")
     parser.add_argument("--top_k", type=int, default=None, help="Top-k sampling.")
-    parser.add_argument("--max-new-tokens", type=int, default=32, help="Maximum generated tokens.")
+    parser.add_argument("--max-new-tokens", type=int, default=20, help="Maximum generated tokens.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     parser.add_argument(
         "--torch-dtype",
@@ -54,6 +63,40 @@ def parse_args() -> argparse.Namespace:
         default=4,
         help="Batch size for generation. Increase to improve GPU utilization.",
     )
+    parser.add_argument(
+        "--input-mode",
+        type=str,
+        default="multimodal",
+        choices=["multimodal", "text-only"],
+        help="Use image+text prompts (multimodal) or text-only prompts for ablation.",
+    )
+    parser.add_argument(
+        "--image-perturbation",
+        type=str,
+        default="clean",
+        choices=["clean", "noise", "mask", "blur", "fgmask"],
+        help="Apply a single-view image perturbation before normal generation.",
+    )
+    parser.add_argument("--perturb-noise-std", type=float, default=25.0, help="Image-space Gaussian noise std.")
+    parser.add_argument("--perturb-noise-steps", type=int, default=500, help="Reserved for compatibility.")
+    parser.add_argument("--perturb-mask-ratio", type=float, default=0.25, help="Mask side ratio.")
+    parser.add_argument("--perturb-mask-min-ratio", type=float, default=None, help="Minimum random mask side ratio.")
+    parser.add_argument("--perturb-mask-max-ratio", type=float, default=None, help="Maximum random mask side ratio.")
+    parser.add_argument("--perturb-mask-count", type=int, default=1, help="Number of random masks.")
+    parser.add_argument("--perturb-blur-radius", type=float, default=2.0, help="Gaussian blur radius.")
+    parser.add_argument(
+        "--perturb-fg-mask-keep-ratio",
+        type=float,
+        default=0.35,
+        help="Foreground keep ratio for fgmask perturbation.",
+    )
+    parser.add_argument(
+        "--perturb-fg-mask-center-bias",
+        type=float,
+        default=0.15,
+        help="Center prior weight for fgmask perturbation.",
+    )
+    add_vcd_args(parser)
     return parser.parse_args()
 
 
@@ -116,32 +159,11 @@ def load_model(model_path: str, base_model_path: str, torch_dtype, attn_implemen
     return model
 
 
-def build_prompt(processor, image: Image.Image, question: str) -> dict:
-    prompt = question.strip() + " Please answer this question with one word."
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image", "image": image},
-                {"type": "text", "text": prompt},
-            ],
-        }
-    ]
-    text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    model_inputs = processor(text=[text], images=[image], return_tensors="pt", padding=True)
-    return prompt, model_inputs
-
-
-def build_prompt_text(processor, image: Image.Image, prompt: str) -> str:
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image", "image": image},
-                {"type": "text", "text": prompt},
-            ],
-        }
-    ]
+def build_prompt_text(processor, image: Image.Image, prompt: str, input_mode: str = "multimodal") -> str:
+    content = [{"type": "text", "text": prompt}]
+    if input_mode == "multimodal":
+        content = [{"type": "image", "image": image}] + content
+    messages = [{"role": "user", "content": content}]
     return processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
 
@@ -149,6 +171,20 @@ def move_to_device(batch: dict):
     if torch.cuda.is_available():
         return {k: v.to("cuda") if hasattr(v, "to") else v for k, v in batch.items()}
     return {k: v.to("cpu") if hasattr(v, "to") else v for k, v in batch.items()}
+
+
+def build_image_perturbation_cfg(args) -> ImagePerturbationConfig:
+    return ImagePerturbationConfig(
+        noise_std=float(args.perturb_noise_std),
+        noise_steps=int(args.perturb_noise_steps),
+        mask_ratio=float(args.perturb_mask_ratio),
+        mask_min_ratio=args.perturb_mask_min_ratio,
+        mask_max_ratio=args.perturb_mask_max_ratio,
+        mask_count=int(args.perturb_mask_count),
+        blur_radius=float(args.perturb_blur_radius),
+        fg_mask_keep_ratio=float(args.perturb_fg_mask_keep_ratio),
+        fg_mask_center_bias=float(args.perturb_fg_mask_center_bias),
+    )
 
 
 def main():
@@ -159,7 +195,7 @@ def main():
     questions = get_chunk(questions, args.num_chunks, args.chunk_idx)
 
     processor_path = args.processor_path or args.base_model_path or args.model_path
-    processor = AutoProcessor.from_pretrained(processor_path, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(processor_path, trust_remote_code=True, use_fast=False)
     if hasattr(processor, "tokenizer") and hasattr(processor.tokenizer, "padding_side"):
         processor.tokenizer.padding_side = "left"
     elif hasattr(processor, "padding_side"):
@@ -176,11 +212,11 @@ def main():
     answers_path.parent.mkdir(parents=True, exist_ok=True)
     model_id = os.path.basename(os.path.normpath(args.model_path))
 
-    do_sample = args.temperature is not None and args.temperature > 0
     if args.batch_size <= 0:
         raise ValueError("batch-size must be > 0")
 
     with answers_path.open("w", encoding="utf-8") as writer:
+        perturb_cfg = build_image_perturbation_cfg(args)
         for start in tqdm(range(0, len(questions), args.batch_size), desc="Generating POPE answers"):
             batch_samples = questions[start : start + args.batch_size]
 
@@ -200,42 +236,45 @@ def main():
                 prompt = question.strip() + " Please answer this question with one word."
                 image_path = os.path.join(args.image_folder, image_file)
                 image = Image.open(image_path).convert("RGB")
+                if args.input_mode == "multimodal" and args.image_perturbation != "clean":
+                    # This path evaluates whether a single perturbed image alone
+                    # changes benchmark behavior, independent of contrastive decoding.
+                    image = apply_image_perturbation(image, args.image_perturbation, perturb_cfg)
 
                 qids.append(qid)
                 image_files.append(image_file)
                 prompts.append(prompt)
-                images.append(image)
-                texts.append(build_prompt_text(processor, image, prompt))
+                if args.input_mode == "multimodal":
+                    images.append(image)
+                texts.append(build_prompt_text(processor, image, prompt, input_mode=args.input_mode))
 
-            model_inputs = processor(text=texts, images=images, return_tensors="pt", padding=True)
-            for image in images:
-                image.close()
+                if args.input_mode != "multimodal":
+                    image.close()
 
-            model_inputs = move_to_device(model_inputs)
-            input_token_len = model_inputs["input_ids"].shape[1]
+            if args.input_mode == "multimodal" and not should_use_vcd(args):
+                model_inputs = processor(text=texts, images=images, return_tensors="pt", padding=True)
+                for image in images:
+                    image.close()
+            elif args.input_mode != "multimodal":
+                model_inputs = processor(text=texts, return_tensors="pt", padding=True)
 
-            generate_kwargs = {
-                "max_new_tokens": args.max_new_tokens,
-                "do_sample": do_sample,
-            }
-            if do_sample:
-                generate_kwargs.update(
-                    {
-                        "temperature": args.temperature,
-                        "top_p": args.top_p,
-                    }
+            if args.input_mode == "multimodal" and should_use_vcd(args):
+                outputs = vcd_generate(model, processor, texts, images, args)
+                for image in images:
+                    image.close()
+            else:
+                model_inputs = move_to_device(model_inputs)
+                input_token_len = model_inputs["input_ids"].shape[1]
+                generate_kwargs = build_generate_kwargs(processor, args)
+
+                with torch.inference_mode():
+                    output_ids = model.generate(**model_inputs, **generate_kwargs)
+
+                outputs = processor.batch_decode(
+                    output_ids[:, input_token_len:],
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=False,
                 )
-                if args.top_k is not None:
-                    generate_kwargs["top_k"] = args.top_k
-
-            with torch.inference_mode():
-                output_ids = model.generate(**model_inputs, **generate_kwargs)
-
-            outputs = processor.batch_decode(
-                output_ids[:, input_token_len:],
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=False,
-            )
 
             for qid, image_file, prompt, text in zip(qids, image_files, prompts, outputs):
                 writer.write(

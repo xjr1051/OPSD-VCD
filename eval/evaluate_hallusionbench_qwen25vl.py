@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -9,6 +10,11 @@ import torch
 from PIL import Image
 from tqdm import tqdm
 from transformers import AutoModelForImageTextToText, AutoProcessor, set_seed
+
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.append(str(Path(__file__).resolve().parent))
+
+from vcd_decode_qwen25vl import add_vcd_args, should_use_vcd, vcd_generate
 
 
 def parse_args() -> argparse.Namespace:
@@ -19,16 +25,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-file", type=str, required=True)
     parser.add_argument("--image-root", type=str, required=True, help="Root directory that contains VD/ and VS/ folders.")
     parser.add_argument("--output-file", type=str, required=True)
-    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top_p", type=float, default=1.0)
     parser.add_argument("--top_k", type=int, default=None)
-    parser.add_argument("--max-new-tokens", type=int, default=16)
+    parser.add_argument("--max-new-tokens", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--torch-dtype", type=str, default="float16", choices=["auto", "float16", "bfloat16", "float32"])
     parser.add_argument("--attn-implementation", type=str, default="sdpa")
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--num-chunks", type=int, default=1)
     parser.add_argument("--chunk-idx", type=int, default=0)
+    add_vcd_args(parser)
     return parser.parse_args()
 
 
@@ -179,12 +186,17 @@ def run_group(
     else:
         model_inputs = processor(text=texts, images=images, return_tensors="pt", padding=True)
 
+    if images is not None and should_use_vcd(args):
+        return vcd_generate(model, processor, texts, images, args)
+
     model_inputs = move_to_device(model_inputs)
     input_token_len = model_inputs["input_ids"].shape[1]
 
     generate_kwargs = {
         "max_new_tokens": args.max_new_tokens,
         "do_sample": do_sample,
+        "renormalize_logits": True,
+        "remove_invalid_values": True,
     }
     if do_sample:
         generate_kwargs.update({"temperature": args.temperature, "top_p": args.top_p})
@@ -215,7 +227,7 @@ def main() -> None:
         raise RuntimeError("No HallusionBench rows found for this chunk.")
 
     processor_path = args.processor_path or args.base_model_path or args.model_path
-    processor = AutoProcessor.from_pretrained(processor_path, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(processor_path, trust_remote_code=True, use_fast=False)
     if hasattr(processor, "tokenizer") and hasattr(processor.tokenizer, "padding_side"):
         processor.tokenizer.padding_side = "left"
     elif hasattr(processor, "padding_side"):

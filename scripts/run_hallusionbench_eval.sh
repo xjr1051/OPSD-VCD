@@ -5,11 +5,15 @@ MODEL_PATH=${MODEL_PATH:-/root/autodl-tmp/opsd/output/opsd_full_4gpu/opsd_vcd_si
 BASE_MODEL_PATH=${BASE_MODEL_PATH:-/root/autodl-tmp/models/Qwen2.5-VL-3B-Instruct}
 PROCESSOR_PATH=${PROCESSOR_PATH:-/root/autodl-tmp/models/Qwen2.5-VL-3B-Instruct}
 
-MME_ROOT=${MME_ROOT:-data/MME}
-OUTPUT_ROOT=${OUTPUT_ROOT:-output/eval_mme_$(date +%Y%m%d_%H%M%S)}
+HALLUSION_ROOT=${HALLUSION_ROOT:-data/HallusionBench}
+OUTPUT_ROOT=${OUTPUT_ROOT:-output/eval_hallusionbench_$(date +%Y%m%d_%H%M%S)}
 BATCH_SIZE=${BATCH_SIZE:-8}
-TORCH_DTYPE=${TORCH_DTYPE:-float16}
 PARALLEL_GPUS=${PARALLEL_GPUS:-4}
+TORCH_DTYPE=${TORCH_DTYPE:-float16}
+TEMPERATURE=${TEMPERATURE:-1.0}
+TOP_P=${TOP_P:-1.0}
+TOP_K=${TOP_K:-}
+MAX_NEW_TOKENS=${MAX_NEW_TOKENS:-20}
 USE_VCD_DECODING=${USE_VCD_DECODING:-0}
 VCD_ALPHA=${VCD_ALPHA:-1.0}
 VCD_BETA=${VCD_BETA:-0.1}
@@ -33,11 +37,13 @@ else
   BASE_MODEL_ARG=()
   echo "[config] BASE_MODEL_PATH=<none>"
 fi
+
 echo "[config] PROCESSOR_PATH=${PROCESSOR_PATH}"
-echo "[config] MME_ROOT=${MME_ROOT}"
+echo "[config] HALLUSION_ROOT=${HALLUSION_ROOT}"
 echo "[config] OUTPUT_ROOT=${OUTPUT_ROOT}"
 echo "[config] BATCH_SIZE=${BATCH_SIZE}"
 echo "[config] PARALLEL_GPUS=${PARALLEL_GPUS}"
+echo "[config] TEMPERATURE=${TEMPERATURE}, TOP_P=${TOP_P}, TOP_K=${TOP_K:-<none>}, MAX_NEW_TOKENS=${MAX_NEW_TOKENS}"
 echo "[config] USE_VCD_DECODING=${USE_VCD_DECODING}"
 
 VCD_ARGS=()
@@ -57,11 +63,22 @@ if [[ "${USE_VCD_DECODING}" == "1" ]]; then
   )
 fi
 
-bash scripts/prepare_mme_data.sh
+GEN_ARGS=(
+  --temperature "${TEMPERATURE}"
+  --top_p "${TOP_P}"
+  --max-new-tokens "${MAX_NEW_TOKENS}"
+)
+if [[ -n "${TOP_K}" ]]; then
+  GEN_ARGS+=(--top_k "${TOP_K}")
+fi
 
-ANSWERS_FILE="${OUTPUT_ROOT}/mme_answers.jsonl"
-METRICS_FILE="${OUTPUT_ROOT}/mme_metrics.json"
-SUMMARY_FILE="${OUTPUT_ROOT}/mme_summary.md"
+HALLUSION_ROOT="${HALLUSION_ROOT}" bash scripts/prepare_hallusionbench_data.sh
+
+DATA_FILE="${HALLUSION_ROOT}/HallusionBench.json"
+IMAGE_ROOT="${HALLUSION_ROOT}/data"
+RESPONSES_FILE="${OUTPUT_ROOT}/hallusionbench_responses.json"
+SUMMARY_JSON="${OUTPUT_ROOT}/hallusionbench_summary.json"
+SUMMARY_MD="${OUTPUT_ROOT}/hallusionbench_summary.md"
 
 mkdir -p "${OUTPUT_ROOT}"
 
@@ -71,18 +88,18 @@ if [[ "${PARALLEL_GPUS}" -gt 1 ]]; then
 
   pids=()
   for ((i=0; i<PARALLEL_GPUS; i++)); do
-    CUDA_VISIBLE_DEVICES="${i}" python eval/evaluate_mme_qwen25vl.py \
+    CUDA_VISIBLE_DEVICES="${i}" python eval/evaluate_hallusionbench_qwen25vl.py \
       --model-path "${MODEL_PATH}" \
       "${BASE_MODEL_ARG[@]}" \
       --processor-path "${PROCESSOR_PATH}" \
-      --mme-root "${MME_ROOT}" \
-      --answers-file "${CHUNK_DIR}/answers_chunk_${i}.jsonl" \
-      --metrics-file "${CHUNK_DIR}/metrics_chunk_${i}.json" \
-      --summary-file "${CHUNK_DIR}/summary_chunk_${i}.md" \
+      --data-file "${DATA_FILE}" \
+      --image-root "${IMAGE_ROOT}" \
+      --output-file "${CHUNK_DIR}/responses_chunk_${i}.json" \
       --batch-size "${BATCH_SIZE}" \
       --torch-dtype "${TORCH_DTYPE}" \
       --num-chunks "${PARALLEL_GPUS}" \
       --chunk-idx "${i}" \
+      "${GEN_ARGS[@]}" \
       "${VCD_ARGS[@]}" \
       > "${CHUNK_DIR}/chunk_${i}.log" 2>&1 &
     pid=$!
@@ -96,46 +113,45 @@ if [[ "${PARALLEL_GPUS}" -gt 1 ]]; then
       failed=1
     fi
   done
+
   if [[ "${failed}" -ne 0 ]]; then
-    echo "[error] one or more chunk jobs failed"
+    echo "[error] one or more HallusionBench chunk jobs failed"
     exit 1
   fi
-
-  cat "${CHUNK_DIR}"/answers_chunk_*.jsonl > "${ANSWERS_FILE}"
 
   python - <<PY
 import json
 from pathlib import Path
-from eval.evaluate_mme_qwen25vl import compute_mme_metrics, write_summary_markdown
 
-answers_file = Path("${ANSWERS_FILE}")
-metrics_file = Path("${METRICS_FILE}")
-summary_file = Path("${SUMMARY_FILE}")
-
-records = []
-with answers_file.open("r", encoding="utf-8") as f:
-    for line in f:
-        line = line.strip()
-        if line:
-            records.append(json.loads(line))
-
-metrics = compute_mme_metrics(records)
-metrics_file.write_text(json.dumps(metrics, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-write_summary_markdown(summary_file, metrics)
-print(f"[score] total={metrics['totals']['total']:.2f}, perception={metrics['totals']['perception']:.2f}, cognition={metrics['totals']['cognition']:.2f}")
+chunk_dir = Path("${CHUNK_DIR}")
+out_file = Path("${RESPONSES_FILE}")
+rows = []
+for p in sorted(chunk_dir.glob('responses_chunk_*.json')):
+    rows.extend(json.loads(p.read_text(encoding='utf-8')))
+rows = sorted(rows, key=lambda x: x.get('_orig_index', 10**9))
+out_file.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding='utf-8')
+print(f"[done] responses: {out_file}")
+print(f"[info] num_samples={len(rows)}")
 PY
 else
-  python eval/evaluate_mme_qwen25vl.py \
+  python eval/evaluate_hallusionbench_qwen25vl.py \
     --model-path "${MODEL_PATH}" \
     "${BASE_MODEL_ARG[@]}" \
     --processor-path "${PROCESSOR_PATH}" \
-    --mme-root "${MME_ROOT}" \
-    --answers-file "${ANSWERS_FILE}" \
-    --metrics-file "${METRICS_FILE}" \
-    --summary-file "${SUMMARY_FILE}" \
+    --data-file "${DATA_FILE}" \
+    --image-root "${IMAGE_ROOT}" \
+    --output-file "${RESPONSES_FILE}" \
     --batch-size "${BATCH_SIZE}" \
     --torch-dtype "${TORCH_DTYPE}" \
+    "${GEN_ARGS[@]}" \
     "${VCD_ARGS[@]}"
 fi
 
-echo "[done] summary: ${SUMMARY_FILE}"
+python eval/score_hallusionbench.py \
+  --input-file "${RESPONSES_FILE}" \
+  --output-json "${SUMMARY_JSON}" \
+  --output-md "${SUMMARY_MD}"
+
+echo "[done] HallusionBench outputs: ${OUTPUT_ROOT}"
+echo "[done] responses: ${RESPONSES_FILE}"
+echo "[done] summary: ${SUMMARY_MD}"

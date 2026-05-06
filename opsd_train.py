@@ -188,16 +188,103 @@ class CustomScriptArguments(ScriptArguments):
             "help": "Gaussian noise std for the noise view transform."
         },
     )
+    noise_steps: int = field(
+        default=500,
+        metadata={
+            "help": "Diffusion step t for paper-faithful VCD clean-noise perturbation."
+        },
+    )
+    use_tensor_diffusion_noise: bool = field(
+        default=False,
+        metadata={
+            "help": "Use processor-output tensor diffusion noise for the noise view, matching VCD clean-noise more closely than image-space Gaussian noise."
+        },
+    )
+    teacher_confidence_threshold: float = field(
+        default=0.0,
+        metadata={
+            "help": "Only distill tokens whose teacher max-probability is above this threshold. "
+            "Set to 0 to disable confidence filtering."
+        },
+    )
+    teacher_confidence_min_keep: int = field(
+        default=0,
+        metadata={
+            "help": "Always keep at least this many highest-confidence teacher token positions per sample "
+            "when confidence filtering is enabled. Set to 0 to disable the fallback."
+        },
+    )
+    use_margin_loss: bool = field(
+        default=False,
+        metadata={
+            "help": "Use a VCD-style margin objective on the gold token logit instead of full-distribution JSD. "
+            "This teaches clean/noisy confidence separation directly rather than matching the whole answer distribution."
+        },
+    )
+    margin_loss_value: float = field(
+        default=0.5,
+        metadata={
+            "help": "Target margin for clean-vs-noisy gold-token logits when use_margin_loss=True."
+        },
+    )
     mask_ratio: float = field(
         default=0.25,
         metadata={
             "help": "Rectangle area ratio for the mask view transform."
         },
     )
+    mask_min_ratio: float = field(
+        default=None,
+        metadata={
+            "help": "Optional lower bound for sampled mask side ratio. Defaults to mask_ratio."
+        },
+    )
+    mask_max_ratio: float = field(
+        default=None,
+        metadata={
+            "help": "Optional upper bound for sampled mask side ratio. Defaults to mask_ratio."
+        },
+    )
+    mask_count: int = field(
+        default=1,
+        metadata={
+            "help": "Number of random rectangles applied in mask perturbation."
+        },
+    )
     blur_radius: float = field(
         default=2.0,
         metadata={
             "help": "Gaussian blur radius for the blur view transform."
+        },
+    )
+    fg_mask_keep_ratio: float = field(
+        default=0.35,
+        metadata={
+            "help": "Foreground area ratio kept by object-preserving mask perturbation (fgmask/object tags)."
+        },
+    )
+    fg_mask_center_bias: float = field(
+        default=0.15,
+        metadata={
+            "help": "Center prior strength for foreground mask extraction when bbox annotations are unavailable."
+        },
+    )
+    object_bbox_field: str = field(
+        default="",
+        metadata={
+            "help": "Optional bbox field name (e.g. [x1,y1,x2,y2]) used to keep only target objects in fgmask mode."
+        },
+    )
+    target_object_field: str = field(
+        default="",
+        metadata={
+            "help": "Optional field containing question-conditioned target object text/tokens for fgmask matching."
+        },
+    )
+    object_bbox_label_field: str = field(
+        default="",
+        metadata={
+            "help": "Optional label field for bbox classes. Can be per-box key or parallel list field used for target-object matching."
         },
     )
     use_multimodal_processor: bool = field(
@@ -355,8 +442,22 @@ if __name__ == "__main__":
                 "image_field": script_args.image_field if script_args.use_image_perturbation_pairs else None,
                 "image_token": script_args.image_token if script_args.use_image_perturbation_pairs else None,
                 "noise_std": script_args.noise_std if script_args.use_image_perturbation_pairs else None,
+                "noise_steps": script_args.noise_steps if script_args.use_image_perturbation_pairs else None,
+                "use_tensor_diffusion_noise": script_args.use_tensor_diffusion_noise if script_args.use_image_perturbation_pairs else None,
+                "teacher_confidence_threshold": script_args.teacher_confidence_threshold,
+                "teacher_confidence_min_keep": script_args.teacher_confidence_min_keep,
+                "use_margin_loss": script_args.use_margin_loss,
+                "margin_loss_value": script_args.margin_loss_value,
                 "mask_ratio": script_args.mask_ratio if script_args.use_image_perturbation_pairs else None,
+                "mask_min_ratio": script_args.mask_min_ratio if script_args.use_image_perturbation_pairs else None,
+                "mask_max_ratio": script_args.mask_max_ratio if script_args.use_image_perturbation_pairs else None,
+                "mask_count": script_args.mask_count if script_args.use_image_perturbation_pairs else None,
                 "blur_radius": script_args.blur_radius if script_args.use_image_perturbation_pairs else None,
+                "fg_mask_keep_ratio": script_args.fg_mask_keep_ratio if script_args.use_image_perturbation_pairs else None,
+                "fg_mask_center_bias": script_args.fg_mask_center_bias if script_args.use_image_perturbation_pairs else None,
+                "object_bbox_field": script_args.object_bbox_field if script_args.object_bbox_field else None,
+                "target_object_field": script_args.target_object_field if script_args.target_object_field else None,
+                "object_bbox_label_field": script_args.object_bbox_label_field if script_args.object_bbox_label_field else None,
                 "use_multimodal_processor": script_args.use_multimodal_processor,
                 "use_privileged_visual_teacher": script_args.use_privileged_visual_teacher,
                 "use_single_visual_teacher": script_args.use_single_visual_teacher,
@@ -515,8 +616,22 @@ if __name__ == "__main__":
         image_field=script_args.image_field,
         image_token=script_args.image_token,
         noise_std=script_args.noise_std,
+        noise_steps=script_args.noise_steps,
+        use_tensor_diffusion_noise=script_args.use_tensor_diffusion_noise,
+        teacher_confidence_threshold=script_args.teacher_confidence_threshold,
+        teacher_confidence_min_keep=script_args.teacher_confidence_min_keep,
+        use_margin_loss=script_args.use_margin_loss,
+        margin_loss_value=script_args.margin_loss_value,
         mask_ratio=script_args.mask_ratio,
+        mask_min_ratio=script_args.mask_min_ratio,
+        mask_max_ratio=script_args.mask_max_ratio,
+        mask_count=script_args.mask_count,
         blur_radius=script_args.blur_radius,
+        fg_mask_keep_ratio=script_args.fg_mask_keep_ratio,
+        fg_mask_center_bias=script_args.fg_mask_center_bias,
+        object_bbox_field=script_args.object_bbox_field,
+        target_object_field=script_args.target_object_field,
+        object_bbox_label_field=script_args.object_bbox_label_field,
         use_privileged_visual_teacher=script_args.use_privileged_visual_teacher,
         use_single_visual_teacher=script_args.use_single_visual_teacher,
         privileged_visual_field=script_args.privileged_visual_field,

@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import re
+import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -10,6 +11,11 @@ import torch
 from PIL import Image
 from tqdm import tqdm
 from transformers import AutoModelForImageTextToText, AutoProcessor, set_seed
+
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.append(str(Path(__file__).resolve().parent))
+
+from vcd_decode_qwen25vl import add_vcd_args, should_use_vcd, vcd_generate
 
 
 IMAGE_EXTS = [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".JPG", ".JPEG", ".PNG", ".BMP", ".WEBP"]
@@ -65,10 +71,10 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Comma-separated categories to run. Empty means all categories.",
     )
-    parser.add_argument("--temperature", type=float, default=0.0, help="Generation temperature.")
+    parser.add_argument("--temperature", type=float, default=1.0, help="Generation temperature.")
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p sampling.")
     parser.add_argument("--top_k", type=int, default=None, help="Top-k sampling.")
-    parser.add_argument("--max-new-tokens", type=int, default=16, help="Maximum generated tokens.")
+    parser.add_argument("--max-new-tokens", type=int, default=20, help="Maximum generated tokens.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     parser.add_argument(
         "--torch-dtype",
@@ -86,6 +92,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=8, help="Batch size for generation.")
     parser.add_argument("--num-chunks", type=int, default=1, help="Split all samples into N chunks.")
     parser.add_argument("--chunk-idx", type=int, default=0, help="Current chunk index.")
+    add_vcd_args(parser)
     return parser.parse_args()
 
 
@@ -351,7 +358,7 @@ def build_prompt_text(processor, image: Image.Image, prompt: str) -> str:
 
 def evaluate_samples(args: argparse.Namespace, samples: List[dict]) -> List[dict]:
     processor_path = args.processor_path or args.base_model_path or args.model_path
-    processor = AutoProcessor.from_pretrained(processor_path, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(processor_path, trust_remote_code=True, use_fast=False)
     if hasattr(processor, "tokenizer") and hasattr(processor.tokenizer, "padding_side"):
         processor.tokenizer.padding_side = "left"
     elif hasattr(processor, "padding_side"):
@@ -371,6 +378,8 @@ def evaluate_samples(args: argparse.Namespace, samples: List[dict]) -> List[dict
     generate_kwargs = {
         "max_new_tokens": args.max_new_tokens,
         "do_sample": do_sample,
+        "renormalize_logits": True,
+        "remove_invalid_values": True,
     }
     if do_sample:
         generate_kwargs.update({"temperature": args.temperature, "top_p": args.top_p})
@@ -391,21 +400,24 @@ def evaluate_samples(args: argparse.Namespace, samples: List[dict]) -> List[dict
             images.append(image)
             texts.append(build_prompt_text(processor, image, prompt))
 
-        model_inputs = processor(text=texts, images=images, return_tensors="pt", padding=True)
+        if should_use_vcd(args):
+            decoded = vcd_generate(model, processor, texts, images, args)
+        else:
+            model_inputs = processor(text=texts, images=images, return_tensors="pt", padding=True)
+            model_inputs = move_to_device(model_inputs)
+            input_token_len = model_inputs["input_ids"].shape[1]
+
+            with torch.inference_mode():
+                output_ids = model.generate(**model_inputs, **generate_kwargs)
+
+            decoded = processor.batch_decode(
+                output_ids[:, input_token_len:],
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )
+
         for image in images:
             image.close()
-
-        model_inputs = move_to_device(model_inputs)
-        input_token_len = model_inputs["input_ids"].shape[1]
-
-        with torch.inference_mode():
-            output_ids = model.generate(**model_inputs, **generate_kwargs)
-
-        decoded = processor.batch_decode(
-            output_ids[:, input_token_len:],
-            skip_special_tokens=True,
-            clean_up_tokenization_spaces=False,
-        )
 
         for sample, prompt, pred_text in zip(batch_samples, prompts, decoded):
             pred_norm = normalize_yes_no(pred_text)

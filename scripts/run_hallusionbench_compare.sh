@@ -5,9 +5,9 @@ BASELINE_MODEL_PATH=${BASELINE_MODEL_PATH:-/root/autodl-tmp/models/Qwen2.5-VL-3B
 OURS_MODEL_PATH=${OURS_MODEL_PATH:-/root/autodl-tmp/opsd/output/opsd_full_4gpu/opsd_vcd_single_teacher_e1_cap1000_nccl_20260414_020000}
 OURS_BASE_MODEL_PATH=${OURS_BASE_MODEL_PATH-"/root/autodl-tmp/models/Qwen2.5-VL-3B-Instruct"}
 PROCESSOR_PATH=${PROCESSOR_PATH:-/root/autodl-tmp/models/Qwen2.5-VL-3B-Instruct}
-MME_ROOT=${MME_ROOT:-data/MME}
+HALLUSION_ROOT=${HALLUSION_ROOT:-data/HallusionBench}
 
-OUTPUT_ROOT=${OUTPUT_ROOT:-output/eval_mme_compare_$(date +%Y%m%d_%H%M%S)}
+OUTPUT_ROOT=${OUTPUT_ROOT:-output/eval_hallusionbench_compare_$(date +%Y%m%d_%H%M%S)}
 BATCH_SIZE=${BATCH_SIZE:-8}
 PARALLEL_GPUS=${PARALLEL_GPUS:-4}
 TORCH_DTYPE=${TORCH_DTYPE:-float16}
@@ -30,23 +30,16 @@ OURS_VCD_VIEW_PAIR=${OURS_VCD_VIEW_PAIR:-clean-noise}
 
 BASELINE_OUTPUT_ROOT="${OUTPUT_ROOT}/baseline"
 OURS_OUTPUT_ROOT="${OUTPUT_ROOT}/ours"
-COMPARE_MD="${OUTPUT_ROOT}/mme_compare_ours_vs_baseline.md"
-
-echo "[compare] OUTPUT_ROOT=${OUTPUT_ROOT}"
-echo "[compare] BASELINE_MODEL_PATH=${BASELINE_MODEL_PATH}"
-echo "[compare] OURS_MODEL_PATH=${OURS_MODEL_PATH}"
-echo "[compare] OURS_BASE_MODEL_PATH=${OURS_BASE_MODEL_PATH}"
-echo "[compare] MME_ROOT=${MME_ROOT}"
-echo "[compare] BATCH_SIZE=${BATCH_SIZE}, PARALLEL_GPUS=${PARALLEL_GPUS}"
+COMPARE_MD="${OUTPUT_ROOT}/hallusionbench_compare_ours_vs_baseline.md"
 
 mkdir -p "${OUTPUT_ROOT}"
 
-echo "[step] run baseline with the same eval pipeline"
-OUTPUT_ROOT="${BASELINE_OUTPUT_ROOT}" \
-MME_ROOT="${MME_ROOT}" \
+echo "[step] run baseline"
 MODEL_PATH="${BASELINE_MODEL_PATH}" \
 BASE_MODEL_PATH="none" \
 PROCESSOR_PATH="${PROCESSOR_PATH}" \
+HALLUSION_ROOT="${HALLUSION_ROOT}" \
+OUTPUT_ROOT="${BASELINE_OUTPUT_ROOT}" \
 BATCH_SIZE="${BATCH_SIZE}" \
 PARALLEL_GPUS="${PARALLEL_GPUS}" \
 TORCH_DTYPE="${TORCH_DTYPE}" \
@@ -60,14 +53,14 @@ VCD_BETA="${BASELINE_VCD_BETA}" \
 VCD_GAMMA="${BASELINE_VCD_GAMMA}" \
 VCD_NOISE_STEPS="${BASELINE_VCD_NOISE_STEPS}" \
 VCD_VIEW_PAIR="${BASELINE_VCD_VIEW_PAIR}" \
-bash scripts/run_mme_eval.sh
+bash scripts/run_hallusionbench_eval.sh
 
-echo "[step] run ours with the same eval pipeline"
-OUTPUT_ROOT="${OURS_OUTPUT_ROOT}" \
-MME_ROOT="${MME_ROOT}" \
+echo "[step] run ours"
 MODEL_PATH="${OURS_MODEL_PATH}" \
 BASE_MODEL_PATH="${OURS_BASE_MODEL_PATH}" \
 PROCESSOR_PATH="${PROCESSOR_PATH}" \
+HALLUSION_ROOT="${HALLUSION_ROOT}" \
+OUTPUT_ROOT="${OURS_OUTPUT_ROOT}" \
 BATCH_SIZE="${BATCH_SIZE}" \
 PARALLEL_GPUS="${PARALLEL_GPUS}" \
 TORCH_DTYPE="${TORCH_DTYPE}" \
@@ -81,57 +74,77 @@ VCD_BETA="${OURS_VCD_BETA}" \
 VCD_GAMMA="${OURS_VCD_GAMMA}" \
 VCD_NOISE_STEPS="${OURS_VCD_NOISE_STEPS}" \
 VCD_VIEW_PAIR="${OURS_VCD_VIEW_PAIR}" \
-bash scripts/run_mme_eval.sh
+bash scripts/run_hallusionbench_eval.sh
 
-echo "[step] build compare markdown"
 python - <<PY
 import json
 from pathlib import Path
 
-ours_path = Path("${OURS_OUTPUT_ROOT}/mme_metrics.json")
-base_path = Path("${BASELINE_OUTPUT_ROOT}/mme_metrics.json")
+base_root = Path("${BASELINE_OUTPUT_ROOT}")
+ours_root = Path("${OURS_OUTPUT_ROOT}")
 out_path = Path("${COMPARE_MD}")
 
-ours = json.loads(ours_path.read_text(encoding="utf-8"))
-base = json.loads(base_path.read_text(encoding="utf-8"))
+base = json.loads((base_root / "hallusionbench_summary.json").read_text(encoding="utf-8"))
+ours = json.loads((ours_root / "hallusionbench_summary.json").read_text(encoding="utf-8"))
 
-cats = sorted(set(ours["per_category"]).union(base["per_category"]))
+metric_map = {
+    "qAcc": "Acc per question pair (qAcc)",
+    "fAcc": "Acc per figure (fAcc)",
+    "easy": "Acc per easy question",
+    "hard": "Acc per hard question",
+    "aAcc": "Acc per question (aAcc)",
+    "VD": "VD",
+    "VS": "VS",
+    "overall": "Overall",
+}
 
-def g(d, cat, key):
-    return float(d.get("per_category", {}).get(cat, {}).get(key, 0.0))
+def extract(summary):
+    # Backward-compatible key resolution for different score_hallusionbench versions.
+    leaderboard = summary.get("leaderboard_metrics") or summary.get("Leaderboard Metrics")
+    qa = summary.get("question_accuracy") or summary.get("Question Accuracy")
+    if leaderboard is None or qa is None:
+        raise KeyError(
+            "Missing leaderboard/question accuracy keys. "
+            f"Available top-level keys: {list(summary.keys())}"
+        )
 
-lines = []
-lines.append("# MME Ours vs Baseline")
-lines.append("")
-lines.append("| Metric | Ours | Baseline | Delta (Ours-Baseline) |")
-lines.append("|---|---:|---:|---:|")
-for k, label in [("total", "Total"), ("perception", "Perception"), ("cognition", "Cognition")]:
-    o = float(ours["totals"][k])
-    b = float(base["totals"][k])
-    lines.append(f"| {label} | {o:.2f} | {b:.2f} | {o-b:+.2f} |")
+    def pick(d, *keys):
+        for k in keys:
+            if k in d:
+                return float(d[k])
+        raise KeyError(f"Missing keys {keys} in section with keys={list(d.keys())}")
 
-lines.append("")
-lines.append("| Category | Ours Score | Baseline Score | Delta | Ours Acc | Baseline Acc | Acc Delta | Ours Acc+ | Baseline Acc+ | Acc+ Delta |")
-lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
-for c in cats:
-    os = g(ours, c, "score")
-    bs = g(base, c, "score")
-    oa = g(ours, c, "acc")
-    ba = g(base, c, "acc")
-    op = g(ours, c, "acc_plus")
-    bp = g(base, c, "acc_plus")
-    lines.append(
-        f"| {c} | {os:.2f} | {bs:.2f} | {os-bs:+.2f} | {oa:.2f} | {ba:.2f} | {oa-ba:+.2f} | {op:.2f} | {bp:.2f} | {op-bp:+.2f} |"
-    )
+    return {
+        "qAcc": pick(leaderboard, "acc_per_question_pair", "Acc per question pair (qAcc)"),
+        "fAcc": pick(leaderboard, "acc_per_figure", "Acc per figure (fAcc)"),
+        "easy": pick(leaderboard, "acc_per_easy_question", "Acc per easy question"),
+        "hard": pick(leaderboard, "acc_per_hard_question", "Acc per hard question"),
+        "aAcc": pick(leaderboard, "acc_per_question", "Acc per question (aAcc)"),
+        "VD": pick(qa, "VD"),
+        "VS": pick(qa, "VS"),
+        "overall": pick(qa, "Overall"),
+    }
+
+base_m = extract(base)
+ours_m = extract(ours)
+order = ["qAcc", "fAcc", "easy", "hard", "aAcc", "VD", "VS", "overall"]
+
+lines = [
+    "# HallusionBench Ours vs Baseline",
+    "",
+    "| Metric | Ours | Baseline | Delta (Ours-Baseline) |",
+    "|---|---:|---:|---:|",
+]
+for key in order:
+    o = ours_m[key]
+    b = base_m[key]
+    lines.append(f"| {metric_map[key]} | {o:.4f} | {b:.4f} | {o-b:+.4f} |")
 
 out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 print(f"[done] compare file: {out_path}")
-print(f"[score] total_delta={float(ours['totals']['total']) - float(base['totals']['total']):+.2f}")
 PY
 
-echo "[done] baseline summary: ${BASELINE_OUTPUT_ROOT}/mme_summary.md"
-echo "[done] ours summary: ${OURS_OUTPUT_ROOT}/mme_summary.md"
-echo "[done] compare markdown: ${COMPARE_MD}"
+echo "[done] HallusionBench compare markdown: ${COMPARE_MD}"
 if [[ "${OURS_BASE_MODEL_PATH,,}" == "none" ]]; then
   OURS_BASE_MODEL_PATH=""
 fi

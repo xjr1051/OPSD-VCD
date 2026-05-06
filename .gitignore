@@ -1,0 +1,14 @@
+__pycache__/
+eval/__pycache__/
+scripts/__pycache__/
+data/
+logs/
+output/
+wandb/
+*.png
+*.jpg
+*.jpeg
+*.safetensors
+*.bin
+*.pt
+*.pth

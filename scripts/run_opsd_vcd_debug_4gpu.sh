@@ -1,4 +1,4 @@
-[#!/usr/bin/env bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # Multi-GPU low-VRAM debug launcher for visual OPSD + VCD.
@@ -40,8 +40,10 @@ NUM_PROCESSES="${NUM_PROCESSES:-4}"
 PER_DEVICE_BS="${PER_DEVICE_BS:-2}"
 GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS:-1}"
 NUM_TRAIN_EPOCHS="${NUM_TRAIN_EPOCHS:-1}"
-MAX_STEPS="${MAX_STEPS:-300}"
-MAX_LENGTH="${MAX_LENGTH:-2048}"
+MAX_STEPS="${MAX_STEPS:-1000}"
+# Qwen2.5-VL can emit very long multimodal tokenized prompts for some samples.
+# Keep a larger default to avoid image-token truncation mismatches.
+MAX_LENGTH="${MAX_LENGTH:-24576}"
 MAX_COMPLETION_LENGTH="${MAX_COMPLETION_LENGTH:-128}"
 
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/output/opsd_debug_${NUM_PROCESSES}gpu}"
@@ -60,8 +62,22 @@ PERTURBATION_MODE="${PERTURBATION_MODE:-clean-noise}"
 VIEW_PAIRS="${VIEW_PAIRS:-clean-noise}"
 PAIR_SAMPLING_STRATEGY="${PAIR_SAMPLING_STRATEGY:-first}"
 NOISE_STD="${NOISE_STD:-15.0}"
+NOISE_STEPS="${NOISE_STEPS:-500}"
+USE_TENSOR_DIFFUSION_NOISE="${USE_TENSOR_DIFFUSION_NOISE:-0}"
+TEACHER_CONFIDENCE_THRESHOLD="${TEACHER_CONFIDENCE_THRESHOLD:-0.0}"
+TEACHER_CONFIDENCE_MIN_KEEP="${TEACHER_CONFIDENCE_MIN_KEEP:-0}"
+USE_MARGIN_LOSS="${USE_MARGIN_LOSS:-0}"
+MARGIN_LOSS_VALUE="${MARGIN_LOSS_VALUE:-0.5}"
 MASK_RATIO="${MASK_RATIO:-0.15}"
-BLUR_RADIUS="${BLUR_RADIUS:-1.5}"
+MASK_MIN_RATIO="${MASK_MIN_RATIO:-${MASK_RATIO}}"
+MASK_MAX_RATIO="${MASK_MAX_RATIO:-${MASK_RATIO}}"
+MASK_COUNT="${MASK_COUNT:-1}"
+BLUR_RADIUS="${BLUR_RADIUS:-2.0}"
+FG_MASK_KEEP_RATIO="${FG_MASK_KEEP_RATIO:-0.35}"
+FG_MASK_CENTER_BIAS="${FG_MASK_CENTER_BIAS:-0.15}"
+OBJECT_BBOX_FIELD="${OBJECT_BBOX_FIELD:-}"
+TARGET_OBJECT_FIELD="${TARGET_OBJECT_FIELD:-}"
+OBJECT_BBOX_LABEL_FIELD="${OBJECT_BBOX_LABEL_FIELD:-}"
 ATTN_IMPLEMENTATION="${ATTN_IMPLEMENTATION:-sdpa}"
 TORCH_DTYPE="${TORCH_DTYPE:-float16}"
 ENABLE_GRADIENT_CHECKPOINTING="${ENABLE_GRADIENT_CHECKPOINTING:-1}"
@@ -92,6 +108,8 @@ IMAGE_TOKEN="${IMAGE_TOKEN:-<|image_pad|>}"
 # Special rule requested by current experiments:
 # - clean-noise => teacher=clean, student=noise
 # - clean-mask  => teacher=mask,  student=clean
+# - clean-blur  => teacher=clean, student=blur
+# - object-clean=> teacher=fgmask, student=clean
 if [[ "${USE_IMAGE_PERTURBATION_PAIRS}" == "1" ]]; then
   case "${PERTURBATION_MODE}" in
     clean-noise)
@@ -103,8 +121,11 @@ if [[ "${USE_IMAGE_PERTURBATION_PAIRS}" == "1" ]]; then
     clean-blur)
       VIEW_PAIRS="clean-blur"
       ;;
+    object-clean|fgmask-clean)
+      VIEW_PAIRS="fgmask-clean"
+      ;;
     *)
-      echo "[error] Unsupported PERTURBATION_MODE=${PERTURBATION_MODE}. Use one of: clean-noise, clean-mask, clean-blur" >&2
+      echo "[error] Unsupported PERTURBATION_MODE=${PERTURBATION_MODE}. Use one of: clean-noise, clean-mask, clean-blur, object-clean" >&2
       exit 1
       ;;
   esac
@@ -157,8 +178,17 @@ cmd=(
   --image_field "${IMAGE_FIELD}"
   --image_token "${IMAGE_TOKEN}"
   --noise_std "${NOISE_STD}"
+  --noise_steps "${NOISE_STEPS}"
+  --teacher_confidence_threshold "${TEACHER_CONFIDENCE_THRESHOLD}"
+  --teacher_confidence_min_keep "${TEACHER_CONFIDENCE_MIN_KEEP}"
+  --margin_loss_value "${MARGIN_LOSS_VALUE}"
   --mask_ratio "${MASK_RATIO}"
+  --mask_min_ratio "${MASK_MIN_RATIO}"
+  --mask_max_ratio "${MASK_MAX_RATIO}"
+  --mask_count "${MASK_COUNT}"
   --blur_radius "${BLUR_RADIUS}"
+  --fg_mask_keep_ratio "${FG_MASK_KEEP_RATIO}"
+  --fg_mask_center_bias "${FG_MASK_CENTER_BIAS}"
   --privileged_visual_field "${PRIVILEGED_VISUAL_FIELD}"
   --good_view_field problem_good_view
   --bad_view_field problem_bad_view
@@ -172,6 +202,18 @@ cmd=(
 
 if [[ -n "${DATASET_CONFIG_NAME}" ]]; then
   cmd+=(--dataset_config_name "${DATASET_CONFIG_NAME}")
+fi
+
+if [[ -n "${OBJECT_BBOX_FIELD}" ]]; then
+  cmd+=(--object_bbox_field "${OBJECT_BBOX_FIELD}")
+fi
+
+if [[ -n "${TARGET_OBJECT_FIELD}" ]]; then
+  cmd+=(--target_object_field "${TARGET_OBJECT_FIELD}")
+fi
+
+if [[ -n "${OBJECT_BBOX_LABEL_FIELD}" ]]; then
+  cmd+=(--object_bbox_label_field "${OBJECT_BBOX_LABEL_FIELD}")
 fi
 
 if [[ -n "${DDP_BACKEND}" ]]; then
@@ -220,6 +262,14 @@ if [[ "${USE_IMAGE_PERTURBATION_PAIRS}" == "1" ]]; then
   cmd+=(--use_image_perturbation_pairs)
 fi
 
+if [[ "${USE_TENSOR_DIFFUSION_NOISE}" == "1" ]]; then
+  cmd+=(--use_tensor_diffusion_noise)
+fi
+
+if [[ "${USE_MARGIN_LOSS}" == "1" ]]; then
+  cmd+=(--use_margin_loss)
+fi
+
 if [[ "${USE_PRIVILEGED_VISUAL_TEACHER}" == "1" ]]; then
   cmd+=(--use_privileged_visual_teacher)
 fi
@@ -239,7 +289,10 @@ echo "[run] visual_opsd: USE_VCD_OPSD=${USE_VCD_OPSD}, USE_IMAGE_PERTURBATION_PA
 echo "[run] single_teacher: USE_SINGLE_VISUAL_TEACHER=${USE_SINGLE_VISUAL_TEACHER}"
 echo "[run] perturbation_mode: PERTURBATION_MODE=${PERTURBATION_MODE}"
 echo "[run] visual_pair: VIEW_PAIRS=${VIEW_PAIRS}, PAIR_SAMPLING_STRATEGY=${PAIR_SAMPLING_STRATEGY}, VCD_ALPHA=${VCD_ALPHA}"
-echo "[run] perturb_strength: NOISE_STD=${NOISE_STD}, MASK_RATIO=${MASK_RATIO}, BLUR_RADIUS=${BLUR_RADIUS}"
+echo "[run] perturb_strength: NOISE_STD=${NOISE_STD}, MASK_RATIO=${MASK_RATIO}, MASK_MIN_RATIO=${MASK_MIN_RATIO}, MASK_MAX_RATIO=${MASK_MAX_RATIO}, MASK_COUNT=${MASK_COUNT}, BLUR_RADIUS=${BLUR_RADIUS}"
+echo "[run] teacher_confidence: THRESHOLD=${TEACHER_CONFIDENCE_THRESHOLD}, MIN_KEEP=${TEACHER_CONFIDENCE_MIN_KEEP}"
+echo "[run] margin_loss: ENABLED=${USE_MARGIN_LOSS}, VALUE=${MARGIN_LOSS_VALUE}"
+echo "[run] fg_mask: FG_MASK_KEEP_RATIO=${FG_MASK_KEEP_RATIO}, FG_MASK_CENTER_BIAS=${FG_MASK_CENTER_BIAS}, OBJECT_BBOX_FIELD=${OBJECT_BBOX_FIELD:-none}"
+echo "[run] target_match: TARGET_OBJECT_FIELD=${TARGET_OBJECT_FIELD:-none}, OBJECT_BBOX_LABEL_FIELD=${OBJECT_BBOX_LABEL_FIELD:-none}"
 
 "${cmd[@]}"
-]
